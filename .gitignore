@@ -1,0 +1,11 @@
+.env
+*.pem
+*.key
+secrets/
+
+.vscode
+
+go.mod
+go.sum
+
+SECURITY-REVIEW.md

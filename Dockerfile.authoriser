@@ -1,0 +1,18 @@
+FROM golang:alpine AS build
+WORKDIR /src
+
+COPY go.mod ./
+RUN go mod download
+
+COPY . .
+RUN go build -o /authoriser ./cmd/authoriser
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -H appuser
+
+COPY --from=build /authoriser /authoriser
+USER appuser
+
+EXPOSE 8083
+CMD ["/authoriser"]

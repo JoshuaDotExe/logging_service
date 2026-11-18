@@ -1,0 +1,90 @@
+limit_req_zone $binary_remote_addr zone=account_ingress:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=key_ingress:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=log_ingress:10m rate=100r/s;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${NGINX_SERVER_NAME};
+
+    location / {
+        return 308 https://${NGINX_SERVER_NAME}$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${NGINX_SERVER_NAME};
+
+    ssl_certificate /run/secrets/nginx_tls_certificate;
+    ssl_certificate_key /run/secrets/nginx_tls_private_key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:TLS:10m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Request-ID $request_id always;
+    limit_req_status 429;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Request-ID $request_id;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 15s;
+    proxy_read_timeout 15s;
+    proxy_next_upstream off;
+
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /account {
+        limit_req zone=account_ingress burst=10 nodelay;
+        client_max_body_size 4k;
+        proxy_pass http://accountmanager:${ACCOUNTMANAGER_API_PORT};
+    }
+
+    location = /login {
+        limit_req zone=account_ingress burst=5 nodelay;
+        client_max_body_size 4k;
+        proxy_pass http://accountmanager:${ACCOUNTMANAGER_API_PORT};
+    }
+
+    location ^~ /logkey {
+        limit_req zone=key_ingress burst=10 nodelay;
+        client_max_body_size 4k;
+        proxy_pass http://logkeymanager:${LOGKEYMANAGER_API_PORT};
+    }
+
+    location ^~ /logs {
+        limit_req zone=log_ingress burst=200 nodelay;
+        client_max_body_size 1m;
+        proxy_pass http://logservice:${LOGSERVICE_API_PORT};
+    }
+
+    location = /log {
+        limit_req zone=log_ingress burst=50 nodelay;
+        client_max_body_size 4k;
+        proxy_pass http://logservice:${LOGSERVICE_API_PORT};
+    }
+
+    location = /ping {
+        access_log off;
+        proxy_pass http://logservice:${LOGSERVICE_API_PORT};
+    }
+
+    location / {
+        return 404;
+    }
+}
