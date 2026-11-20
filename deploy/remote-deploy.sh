@@ -115,4 +115,4 @@ fi
 docker image prune --all --force --filter "until=168h" >/dev/null || true
 
 compose ps
-log "deployed $(grep '^IMAGE_TAG=' "$DEPLOY_ROOT/.env" | cut -d"'" -f2)"
+log "deployed $(grep '^RELEASE_VERSION=' "$DEPLOY_ROOT/.env" | cut -d"'" -f2) ($(grep '^RELEASE_COMMIT=' "$DEPLOY_ROOT/.env" | cut -d"'" -f2))"

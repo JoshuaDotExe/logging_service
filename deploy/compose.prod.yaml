@@ -4,7 +4,8 @@
 #   docker compose -f compose.yaml -f deploy/compose.prod.yaml ...
 #
 # Required variables (written to /opt/logging-service/.env by the deploy workflow):
-#   IMAGE_REGISTRY, IMAGE_TAG, DEPLOY_ROOT, POSTGRES_DATA_DIR
+#   IMAGE_REGISTRY, service image digests, RELEASE_VERSION, RELEASE_COMMIT,
+#   DEPLOY_ROOT, POSTGRES_DATA_DIR
 
 x-app: &app
   restart: unless-stopped
@@ -12,7 +13,7 @@ x-app: &app
 services:
   authoriser:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/authoriser:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/authoriser@${AUTHORISER_IMAGE_DIGEST:?}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${AUTHORISER_API_PORT}/health"]
       interval: 10s
@@ -23,7 +24,7 @@ services:
         condition: service_healthy
   logkeymanager:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/logkeymanager:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/logkeymanager@${LOGKEYMANAGER_IMAGE_DIGEST:?}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOGKEYMANAGER_API_PORT}/health"]
       interval: 10s
@@ -34,7 +35,7 @@ services:
         condition: service_healthy
   logservice:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/logservice:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/logservice@${LOGSERVICE_IMAGE_DIGEST:?}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOGSERVICE_API_PORT}/ping"]
       interval: 10s
@@ -47,7 +48,7 @@ services:
         condition: service_healthy
   accountmanager:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/accountmanager:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/accountmanager@${ACCOUNTMANAGER_IMAGE_DIGEST:?}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${ACCOUNTMANAGER_API_PORT}/health"]
       interval: 10s
@@ -60,7 +61,7 @@ services:
         condition: service_healthy
   tokenhandler:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/tokenhandler:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/tokenhandler@${TOKENHANDLER_IMAGE_DIGEST:?}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${TOKENHANDLER_API_PORT}/health"]
       interval: 10s
@@ -71,7 +72,7 @@ services:
         condition: service_healthy
   nginx:
     <<: *app
-    image: "${IMAGE_REGISTRY:?}/nginx:${IMAGE_TAG:?}"
+    image: "${IMAGE_REGISTRY:?}/nginx@${NGINX_IMAGE_DIGEST:?}"
     volumes:
       - "${DEPLOY_ROOT:?}/acme:/var/www/acme:ro"
     depends_on:

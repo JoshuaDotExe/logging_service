@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (defaults to the triggering commit)
+        type: string
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -42,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-go@v7
@@ -70,30 +76,73 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - name: Shellcheck deploy scripts
-        run: shellcheck deploy/*.sh
+        run: shellcheck deploy/*.sh test/deploy/*.sh
+
+      - name: Test release resolution
+        run: |
+          bash test/deploy/resolve-release.sh
+          bash test/deploy/image-manifest.sh
 
       - name: Build a release bundle with dummy values
         env:
           DOMAIN: logs.example.com
           ACME_EMAIL: ci@example.com
           GHCR_TOKEN: dummy
+          RELEASE_VERSION: v1.2.3
+          RELEASE_COMMIT: 0123456789abcdef0123456789abcdef01234567
         run: |
+          digest="sha256:$(printf '%064d' 0)"
+          jq -n --arg repository "${GITHUB_REPOSITORY,,}" --arg version "$RELEASE_VERSION" \
+            --arg commit "$RELEASE_COMMIT" --arg digest "$digest" \
+            '{schema: 1, repository: $repository, version: $version, commit: $commit,
+              images: {accountmanager: $digest, authoriser: $digest, logkeymanager: $digest,
+                       logservice: $digest, nginx: $digest, tokenhandler: $digest}}' \
+            >"$RUNNER_TEMP/image-manifest.json"
+          IMAGE_MANIFEST="$RUNNER_TEMP/image-manifest.json"
           JWT_PRIVATE_KEY=$(openssl genpkey -algorithm ed25519)
           POSTGRES_PASSWORD=$(openssl rand -hex 32)
           TOKEN_SERVICE_KEY=$(openssl rand -hex 32)
-          export JWT_PRIVATE_KEY POSTGRES_PASSWORD TOKEN_SERVICE_KEY
+          export JWT_PRIVATE_KEY POSTGRES_PASSWORD TOKEN_SERVICE_KEY IMAGE_MANIFEST
           deploy/build-bundle.sh "$RUNNER_TEMP/bundle"
+          for service in ACCOUNTMANAGER AUTHORISER LOGKEYMANAGER LOGSERVICE NGINX TOKENHANDLER; do
+            grep -Fx "${service}_IMAGE_DIGEST='$digest'" "$RUNNER_TEMP/bundle/runtime/env"
+          done
+          grep -Fx "RELEASE_VERSION='$RELEASE_VERSION'" "$RUNNER_TEMP/bundle/runtime/env"
+          grep -Fx "RELEASE_COMMIT='$RELEASE_COMMIT'" "$RUNNER_TEMP/bundle/runtime/env"
+          if RELEASE_VERSION='v1";invalid' deploy/build-bundle.sh "$RUNNER_TEMP/invalid-bundle" >"$RUNNER_TEMP/invalid-version.log" 2>&1; then
+            echo "::error::Bundle accepted an unsafe release version"
+            exit 1
+          fi
+          grep -q 'RELEASE_VERSION has an invalid format' "$RUNNER_TEMP/invalid-version.log"
+          if RELEASE_COMMIT=invalid deploy/build-bundle.sh "$RUNNER_TEMP/invalid-bundle" >"$RUNNER_TEMP/invalid-commit.log" 2>&1; then
+            echo "::error::Bundle accepted an invalid release commit"
+            exit 1
+          fi
+          grep -q 'RELEASE_COMMIT has an invalid format' "$RUNNER_TEMP/invalid-commit.log"
 
       - name: Validate production Compose config
         working-directory: ${{ runner.temp }}/bundle/app
         run: |
           docker compose --project-directory . --env-file ../runtime/env \
-            -f compose.yaml -f deploy/compose.prod.yaml config --quiet
+            -f compose.yaml -f deploy/compose.prod.yaml config --format json |
+            jq -e --arg registry "ghcr.io/${GITHUB_REPOSITORY,,}" \
+              --arg digest "sha256:$(printf '%064d' 0)" \
+              '.services as $services |
+               all(["accountmanager", "authoriser", "logkeymanager", "logservice", "nginx", "tokenhandler"][];
+                   $services[.].image == ($registry + "/" + . + "@" + $digest))' >/dev/null
 
-      - name: Validate nginx config
+      - name: Validate local version defaults
+        run: |
+          grep -vE '^RELEASE_(VERSION|COMMIT)=' "$RUNNER_TEMP/bundle/runtime/env" >"$RUNNER_TEMP/local.env"
+          docker compose --env-file "$RUNNER_TEMP/local.env" -f compose.yaml config --format json |
+            jq -e '.services.nginx.environment.RELEASE_VERSION == "development" and
+                   .services.nginx.environment.RELEASE_COMMIT == "development"' >/dev/null
+
+      - name: Validate nginx config and version endpoint
         run: |
           tmp="$RUNNER_TEMP/nginx"
           mkdir -p "$tmp"
@@ -101,7 +150,7 @@ jobs:
             -subj /CN=logs.example.com -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
           chmod 644 "$tmp/key.pem"
           docker build -q -f Dockerfile.nginx -t logging-service-nginx:ci .
-          docker run --rm \
+          container=$(docker run -d \
             --add-host accountmanager:127.0.0.1 \
             --add-host logkeymanager:127.0.0.1 \
             --add-host logservice:127.0.0.1 \
@@ -109,35 +158,21 @@ jobs:
             -e LOGKEYMANAGER_API_PORT=8082 \
             -e LOGSERVICE_API_PORT=8080 \
             -e NGINX_SERVER_NAME=logs.example.com \
-            -e 'NGINX_ENVSUBST_FILTER=^(ACCOUNTMANAGER_API_PORT|LOGKEYMANAGER_API_PORT|LOGSERVICE_API_PORT|NGINX_SERVER_NAME)$' \
+            -e RELEASE_VERSION=v1.2.3 \
+            -e RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 \
+            -e 'NGINX_ENVSUBST_FILTER=^(ACCOUNTMANAGER_API_PORT|LOGKEYMANAGER_API_PORT|LOGSERVICE_API_PORT|NGINX_SERVER_NAME|RELEASE_VERSION|RELEASE_COMMIT)$' \
             -v "$tmp/cert.pem:/run/secrets/nginx_tls_certificate:ro" \
             -v "$tmp/key.pem:/run/secrets/nginx_tls_private_key:ro" \
-            logging-service-nginx:ci nginx -t
-
-  images:
-    name: Build ${{ matrix.service }} (${{ matrix.platform.architecture }})
-    # Pushes happen in deploy.yml; this only proves the Dockerfiles build.
-    if: github.event_name == 'pull_request'
-    runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
-        platform:
-          - {runner: ubuntu-latest, architecture: linux/amd64}
-          - {runner: ubuntu-24.04-arm, architecture: linux/arm64}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: Dockerfile.${{ matrix.service }}
-          platforms: ${{ matrix.platform.architecture }}
-          push: false
-          cache-from: type=gha,scope=${{ matrix.service }}
+            logging-service-nginx:ci)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker exec "$container" nginx -t
+          for attempt in $(seq 1 10); do
+            if docker exec "$container" wget -qO- --no-check-certificate https://127.0.0.1/version |
+              jq -e '.version == "v1.2.3" and .commit == "0123456789abcdef0123456789abcdef01234567"' >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::nginx did not return the expected version"
+          docker logs "$container"
+          exit 1

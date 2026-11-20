@@ -1,14 +1,12 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "infra/**"
-      - ".github/workflows/terraform.yml"
-      - "**.md"
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Published GitHub Release tag to deploy (e.g. v1.0.0)
+        type: string
+        required: true
       force_recreate:
         description: Recreate every application container (needed after rotating JWT_PRIVATE_KEY or TOKEN_SERVICE_KEY without a code change)
         type: boolean
@@ -22,62 +20,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
-  images:
-    name: Publish ${{ matrix.service }} image
-    needs: ci
+  release:
+    name: Resolve release
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
-    strategy:
-      fail-fast: true
-      matrix:
-        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
+      packages: read
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+      manifest_artifact: deploy-image-manifest-${{ github.run_attempt }}
     steps:
+      - name: Require main workflow branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow from the main branch"
+          exit 1
+
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Image name
-        id: image
+      - name: Validate release and resolve commit
+        id: release
         env:
-          SERVICE: ${{ matrix.service }}
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${SERVICE}" >>"$GITHUB_OUTPUT"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: bash deploy/resolve-release.sh
 
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: docker/setup-buildx-action@v4
-
+      - name: Download and validate image manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          if ! gh release download "$RELEASE_VERSION" --pattern image-manifest.json --dir "$RUNNER_TEMP"; then
+            echo "::error::No image manifest found; run Build release successfully for this release first"
+            exit 1
+          fi
+          bash deploy/image-manifest.sh "$RUNNER_TEMP/image-manifest.json"
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v7
+      - name: Verify published images are available
+        run: |
+          for service in accountmanager authoriser logkeymanager logservice nginx tokenhandler; do
+            digest=$(jq -r --arg service "$service" '.images[$service]' "$RUNNER_TEMP/image-manifest.json")
+            docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}/$service@$digest" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: Dockerfile.${{ matrix.service }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
-            ${{ steps.image.outputs.name }}:main
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          name: deploy-image-manifest-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image-manifest.json
+          if-no-files-found: error
+          retention-days: 1
 
   deploy:
     name: Deploy to OCI
-    needs: images
+    needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -90,10 +95,18 @@ jobs:
       DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       OCI_SSH_NSG_ID: ${{ vars.OCI_SSH_NSG_ID }}
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.release.outputs.commit }}
           persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.release.outputs.manifest_artifact }}
+          path: ${{ runner.temp }}
 
       - name: Check configuration
         env:
@@ -124,6 +137,7 @@ jobs:
           TLS_PRIVATE_KEY: ${{ secrets.TLS_PRIVATE_KEY }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_RECREATE: ${{ inputs.force_recreate && 'true' || 'false' }}
+          IMAGE_MANIFEST: ${{ runner.temp }}/image-manifest.json
         run: deploy/build-bundle.sh "$RUNNER_TEMP/bundle"
 
       - name: Install OCI CLI
@@ -210,6 +224,17 @@ jobs:
             echo "::error::https://$DOMAIN$path did not respond successfully"
             exit 1
           done
+          for _ in $(seq 1 10); do
+            if curl -fsS --max-time 10 --resolve "$DOMAIN:443:$DEPLOY_HOST" "https://$DOMAIN/version" |
+              jq -e --arg version "$RELEASE_VERSION" --arg commit "$RELEASE_COMMIT" \
+                '.version == $version and .commit == $commit' >/dev/null; then
+              echo "https://$DOMAIN/version matches $RELEASE_VERSION ($RELEASE_COMMIT)"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::https://$DOMAIN/version did not match the selected release"
+          exit 1
 
       - name: Close SSH and remove credentials
         if: always()

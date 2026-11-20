@@ -24,6 +24,8 @@ match() {
 }
 
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_SHA:?}" "${GITHUB_ACTOR:?}"
+RELEASE_VERSION=${RELEASE_VERSION:-development}
+RELEASE_COMMIT=${RELEASE_COMMIT:-$GITHUB_SHA}
 POSTGRES_USER=${POSTGRES_USER:-logging}
 POSTGRES_DB=${POSTGRES_DB:-logging}
 JWT_ISSUER=${JWT_ISSUER:-logging-service}
@@ -38,6 +40,7 @@ require POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}"
 require TOKEN_SERVICE_KEY "${TOKEN_SERVICE_KEY:-}"
 require JWT_PRIVATE_KEY "${JWT_PRIVATE_KEY:-}"
 require GHCR_TOKEN "${GHCR_TOKEN:-}"
+require IMAGE_MANIFEST "${IMAGE_MANIFEST:-}"
 
 match DOMAIN "${DOMAIN:-}" '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$' "lowercase DNS name, e.g. logs.example.com"
 match POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}" '^[A-Za-z0-9_-]{24,}$' "at least 24 URL-safe characters (use: openssl rand -hex 32)"
@@ -47,6 +50,8 @@ match POSTGRES_DB "$POSTGRES_DB" '^[a-z_][a-z0-9_]{0,62}$' "lowercase PostgreSQL
 match JWT_ISSUER "$JWT_ISSUER" '^[A-Za-z0-9._:/-]+$' "letters, digits and ._:/-"
 match JWT_AUDIENCE "$JWT_AUDIENCE" '^[A-Za-z0-9._:/-]+$' "letters, digits and ._:/-"
 match FORCE_RECREATE "$FORCE_RECREATE" '^(true|false)$' "true or false"
+match RELEASE_VERSION "$RELEASE_VERSION" '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$' "1-128 safe release-tag characters"
+match RELEASE_COMMIT "$RELEASE_COMMIT" '^[0-9a-f]{40}$' "40-character lowercase commit SHA"
 
 if [[ -n $TLS_CERTIFICATE || -n $TLS_PRIVATE_KEY ]]; then
   tls_mode=provided
@@ -59,6 +64,9 @@ else
 fi
 
 ((errors == 0)) || exit 1
+
+export RELEASE_VERSION RELEASE_COMMIT
+bash "$repo_root/deploy/image-manifest.sh" "$IMAGE_MANIFEST"
 
 rm -rf "$out"
 mkdir -p "$out/app/deploy" "$out/runtime/secrets"
@@ -100,7 +108,11 @@ pg_url="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB?
 env_line() { printf "%s='%s'\n" "$1" "$2"; }
 {
   env_line IMAGE_REGISTRY "ghcr.io/${GITHUB_REPOSITORY,,}"
-  env_line IMAGE_TAG "$GITHUB_SHA"
+  for service in accountmanager authoriser logkeymanager logservice nginx tokenhandler; do
+    env_line "${service^^}_IMAGE_DIGEST" "$(jq -r --arg service "$service" '.images[$service]' "$IMAGE_MANIFEST")"
+  done
+  env_line RELEASE_VERSION "$RELEASE_VERSION"
+  env_line RELEASE_COMMIT "$RELEASE_COMMIT"
   env_line DEPLOY_ROOT "$deploy_root"
   env_line POSTGRES_DATA_DIR /srv/logging-service/postgres
   env_line POSTGRES_USER "$POSTGRES_USER"
@@ -135,4 +147,4 @@ env_line() { printf "%s='%s'\n" "$1" "$2"; }
 
 printf '%s' "$GHCR_TOKEN" >"$out/runtime/ghcr_token"
 
-echo "Release bundle for ${GITHUB_SHA} written (TLS mode: $tls_mode)."
+echo "Release bundle for ${RELEASE_VERSION} (${RELEASE_COMMIT}) written (TLS mode: $tls_mode)."
