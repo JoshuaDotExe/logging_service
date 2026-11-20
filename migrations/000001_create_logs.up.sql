@@ -39,7 +39,7 @@ CREATE TABLE accounts (
     password_changed_at   timestamptz NOT NULL DEFAULT now(),
 
     role                  text NOT NULL DEFAULT 'member',
-    status                text NOT NULL DEFAULT 'pending_verification',
+    status                text NOT NULL DEFAULT 'active',
 
     email_verified_at     timestamptz,
 
