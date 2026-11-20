@@ -3,7 +3,8 @@
 This guide deploys the logging service to one Oracle Cloud (OCI) VM using
 Terraform and GitHub Actions. A1 Flex is the default; the AMD E2.1.Micro shape
 is an experimental, resource-constrained alternative. All deployment runs from
-GitHub, not a laptop.
+GitHub, not a laptop. The host runs Oracle Linux 9 for optimal OCI integration
+and minimal resource footprint.
 
 ## How it fits together
 
@@ -11,7 +12,7 @@ GitHub, not a laptop.
 GitHub Actions                                   OCI (Always Free)
 ──────────────                                   ─────────────────
 terraform.yml  ── Terraform (state in an OCI ─►  VCN, public subnet, NSGs
-  (manual)        Object Storage bucket)         A1 or AMD micro VM (Ubuntu 24.04)
+  (manual)        Object Storage bucket)         A1 or AMD micro VM (Oracle Linux 9)
                                                  50 GB data volume → /srv/logging-service
                                                  Reserved public IP
 
@@ -150,7 +151,7 @@ environment secrets, and pull request workflows never can.
 | Variable | `OCI_NAMESPACE` | Object Storage namespace |
 | Variable | `TF_STATE_BUCKET` | `logging-service-tfstate` |
 | Variable | `DEPLOY_SSH_PUBLIC_KEY` | Contents of `deploy_ssh_key.pub` |
-| Variable (optional) | `ADMIN_SSH_PUBLIC_KEY` | Your own SSH public key for the `ubuntu` user |
+| Variable (optional) | `ADMIN_SSH_PUBLIC_KEY` | Your own SSH public key for the `opc` user |
 | Variable (optional) | `ADMIN_SSH_CIDRS` | JSON list of CIDRs allowed to SSH permanently, e.g. `["203.0.113.10/32"]` |
 | Variable (optional) | `OCI_INSTANCE_SHAPE` | Default `VM.Standard.A1.Flex`; set to `VM.Standard.E2.1.Micro` for the experimental AMD VM |
 | Variable (optional) | `OCI_INSTANCE_OCPUS` | A1 only; default `2` |
@@ -267,7 +268,7 @@ curl -fsS https://logs.example.com/ping
 - Logs of public repositories are public. The workflows never print secrets, the
   Terraform plan or the bundle, and they pass secrets only through `env:`.
 - Port 22 is closed except during a deploy, and then it is open only to the
-  runner's IP. `sshd` accepts only keys, only for the `deploy` and `ubuntu`
+  runner's IP. `sshd` accepts only keys, only for the `deploy` and `opc`
   users, and only the ed25519 host key that Terraform generated.
 - The Terraform state contains the SSH host private key, so the state bucket
   must stay private.

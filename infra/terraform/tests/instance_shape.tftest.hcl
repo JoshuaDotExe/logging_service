@@ -33,8 +33,8 @@ run "a1_default" {
   }
 
   assert {
-    condition     = data.oci_core_images.ubuntu.shape == "VM.Standard.A1.Flex"
-    error_message = "The Ubuntu image search must match the A1 shape."
+    condition     = data.oci_core_images.oracle_linux.shape == "VM.Standard.A1.Flex"
+    error_message = "The Oracle Linux image search must match the A1 shape."
   }
 
   assert {
@@ -58,8 +58,8 @@ run "micro" {
   }
 
   assert {
-    condition     = data.oci_core_images.ubuntu.shape == "VM.Standard.E2.1.Micro"
-    error_message = "The Ubuntu image search must match the micro shape."
+    condition     = data.oci_core_images.oracle_linux.shape == "VM.Standard.E2.1.Micro"
+    error_message = "The Oracle Linux image search must match the micro shape."
   }
 
   assert {

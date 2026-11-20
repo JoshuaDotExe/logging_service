@@ -2,10 +2,10 @@ data "oci_identity_availability_domains" "ads" {
   compartment_id = var.tenancy_ocid
 }
 
-data "oci_core_images" "ubuntu" {
+data "oci_core_images" "oracle_linux" {
   compartment_id           = var.compartment_ocid
-  operating_system         = "Canonical Ubuntu"
-  operating_system_version = var.ubuntu_version
+  operating_system         = "Oracle Linux"
+  operating_system_version = var.oracle_linux_version
   shape                    = var.instance_shape
   state                    = "AVAILABLE"
   sort_by                  = "TIMECREATED"
@@ -45,7 +45,7 @@ resource "oci_core_instance" "app" {
 
   source_details {
     source_type             = "image"
-    source_id               = data.oci_core_images.ubuntu.images[0].id
+    source_id               = data.oci_core_images.oracle_linux.images[0].id
     boot_volume_size_in_gbs = var.boot_volume_size_gbs
   }
 
