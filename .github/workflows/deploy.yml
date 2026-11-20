@@ -24,9 +24,13 @@ jobs:
     name: Resolve release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     outputs:
       commit: ${{ steps.release.outputs.commit }}
       version: ${{ steps.release.outputs.version }}
+      manifest_artifact: deploy-image-manifest-${{ github.run_attempt }}
     steps:
       - name: Require main workflow branch
         if: github.ref != 'refs/heads/main'
@@ -47,65 +51,38 @@ jobs:
           RELEASE_VERSION: ${{ inputs.release_version }}
         run: bash deploy/resolve-release.sh
 
-  ci:
-    needs: release
-    uses: ./.github/workflows/ci.yml
-    with:
-      ref: ${{ needs.release.outputs.commit }}
-    permissions:
-      contents: read
-
-  images:
-    name: Publish ${{ matrix.service }} image
-    needs: [release, ci]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: true
-      matrix:
-        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.release.outputs.commit }}
-          persist-credentials: false
-
-      - name: Image name
-        id: image
+      - name: Download and validate image manifest
         env:
-          SERVICE: ${{ matrix.service }}
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${SERVICE}" >>"$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: docker/setup-buildx-action@v4
-
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          if ! gh release download "$RELEASE_VERSION" --pattern image-manifest.json --dir "$RUNNER_TEMP"; then
+            echo "::error::No image manifest found; run Build release successfully for this release first"
+            exit 1
+          fi
+          bash deploy/image-manifest.sh "$RUNNER_TEMP/image-manifest.json"
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v7
+      - name: Verify published images are available
+        run: |
+          for service in accountmanager authoriser logkeymanager logservice nginx tokenhandler; do
+            digest=$(jq -r --arg service "$service" '.images[$service]' "$RUNNER_TEMP/image-manifest.json")
+            docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}/$service@$digest" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: Dockerfile.${{ matrix.service }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ needs.release.outputs.commit }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ needs.release.outputs.commit }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          name: deploy-image-manifest-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image-manifest.json
+          if-no-files-found: error
+          retention-days: 1
 
   deploy:
     name: Deploy to OCI
-    needs: [release, images]
+    needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -125,6 +102,11 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.commit }}
           persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.release.outputs.manifest_artifact }}
+          path: ${{ runner.temp }}
 
       - name: Check configuration
         env:
@@ -155,6 +137,7 @@ jobs:
           TLS_PRIVATE_KEY: ${{ secrets.TLS_PRIVATE_KEY }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_RECREATE: ${{ inputs.force_recreate && 'true' || 'false' }}
+          IMAGE_MANIFEST: ${{ runner.temp }}/image-manifest.json
         run: deploy/build-bundle.sh "$RUNNER_TEMP/bundle"
 
       - name: Install OCI CLI

@@ -26,8 +26,8 @@ if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
   exit 1
 fi
 
-if ! git cat-file -e "$commit:deploy/versioned-release-v1"; then
-  echo "::error::Release $RELEASE_VERSION predates support for versioned deployments"
+if ! git cat-file -e "$commit:deploy/digest-release-v1"; then
+  echo "::error::Release $RELEASE_VERSION predates support for digest-based deployments"
   exit 1
 fi
 

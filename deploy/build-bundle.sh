@@ -40,6 +40,7 @@ require POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}"
 require TOKEN_SERVICE_KEY "${TOKEN_SERVICE_KEY:-}"
 require JWT_PRIVATE_KEY "${JWT_PRIVATE_KEY:-}"
 require GHCR_TOKEN "${GHCR_TOKEN:-}"
+require IMAGE_MANIFEST "${IMAGE_MANIFEST:-}"
 
 match DOMAIN "${DOMAIN:-}" '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$' "lowercase DNS name, e.g. logs.example.com"
 match POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}" '^[A-Za-z0-9_-]{24,}$' "at least 24 URL-safe characters (use: openssl rand -hex 32)"
@@ -63,6 +64,9 @@ else
 fi
 
 ((errors == 0)) || exit 1
+
+export RELEASE_VERSION RELEASE_COMMIT
+bash "$repo_root/deploy/image-manifest.sh" "$IMAGE_MANIFEST"
 
 rm -rf "$out"
 mkdir -p "$out/app/deploy" "$out/runtime/secrets"
@@ -104,7 +108,9 @@ pg_url="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB?
 env_line() { printf "%s='%s'\n" "$1" "$2"; }
 {
   env_line IMAGE_REGISTRY "ghcr.io/${GITHUB_REPOSITORY,,}"
-  env_line IMAGE_TAG "$RELEASE_COMMIT"
+  for service in accountmanager authoriser logkeymanager logservice nginx tokenhandler; do
+    env_line "${service^^}_IMAGE_DIGEST" "$(jq -r --arg service "$service" '.images[$service]' "$IMAGE_MANIFEST")"
+  done
   env_line RELEASE_VERSION "$RELEASE_VERSION"
   env_line RELEASE_COMMIT "$RELEASE_COMMIT"
   env_line DEPLOY_ROOT "$deploy_root"

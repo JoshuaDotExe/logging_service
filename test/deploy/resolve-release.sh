@@ -22,8 +22,8 @@ git -C "$tmp/repo" config user.name test
 git -C "$tmp/repo" commit -q --allow-empty -m initial
 git -C "$tmp/repo" tag v0.1.0
 mkdir -p "$tmp/repo/deploy"
-printf 'versioned deployment\n' >"$tmp/repo/deploy/versioned-release-v1"
-git -C "$tmp/repo" add deploy/versioned-release-v1
+printf 'digest deployment\n' >"$tmp/repo/deploy/digest-release-v1"
+git -C "$tmp/repo" add deploy/digest-release-v1
 git -C "$tmp/repo" commit -q -m versioned
 commit=$(git -C "$tmp/repo" rev-parse HEAD)
 git -C "$tmp/repo" tag -a v1.2.3 -m release
@@ -62,7 +62,7 @@ check_failure() {
 
 check_success v1.2.3
 check_success v1.2.4
-check_failure v0.1.0 'predates support for versioned deployments'
+check_failure v0.1.0 'predates support for digest-based deployments'
 check_failure v9.0.0 'is not on main'
 check_failure missing 'does not resolve to a commit'
 check_failure '../invalid' 'Release tag must be'

@@ -1,0 +1,150 @@
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Published GitHub Release tag to build (e.g. v1.0.0)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Require main workflow branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow from the main branch"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release and resolve commit
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: bash deploy/resolve-release.sh
+      - name: Reject an existing build manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          assets=$(gh release view "$RELEASE_VERSION" --json assets)
+          if jq -e '.assets | any(.name == "image-manifest.json")' <<<"$assets" >/dev/null; then
+            echo "::error::Release already has an image manifest; create a new release instead of rebuilding it"
+            exit 1
+          fi
+
+  ci:
+    needs: release
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.release.outputs.commit }}
+    permissions:
+      contents: read
+
+  images:
+    name: Publish ${{ matrix.service }} image
+    needs: [release, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.commit }}
+          persist-credentials: false
+      - name: Image name
+        id: image
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${SERVICE}" >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ needs.release.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.commit }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Save image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SERVICE: ${{ matrix.service }}
+        run: printf '%s' "$DIGEST" >"$RUNNER_TEMP/$SERVICE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ github.run_attempt }}-${{ matrix.service }}
+          path: ${{ runner.temp }}/${{ matrix.service }}
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Publish release image manifest
+    needs: [release, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - name: Publish manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
+        run: |
+          images='{}'
+          for service in accountmanager authoriser logkeymanager logservice nginx tokenhandler; do
+            digest=$(<"$RUNNER_TEMP/digests/$service")
+            images=$(jq -c --arg service "$service" --arg digest "$digest" '. + {($service): $digest}' <<<"$images")
+          done
+          jq -n --arg repository "${GITHUB_REPOSITORY,,}" --arg version "$RELEASE_VERSION" \
+            --arg commit "$RELEASE_COMMIT" --argjson images "$images" \
+            '{schema: 1, repository: $repository, version: $version, commit: $commit, images: $images}' \
+            >"$RUNNER_TEMP/image-manifest.json"
+          bash deploy/image-manifest.sh "$RUNNER_TEMP/image-manifest.json"
+          gh release upload "$RELEASE_VERSION" "$RUNNER_TEMP/image-manifest.json"
+          echo "Published image manifest for $RELEASE_VERSION ($RELEASE_COMMIT)" >>"$GITHUB_STEP_SUMMARY"

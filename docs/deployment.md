@@ -16,10 +16,14 @@ terraform.yml  ── Terraform (state in an OCI ─►  VCN, public subnet, NSG
                                                  50 GB data volume → /srv/logging-service
                                                  Reserved public IP
 
-deploy.yml (manual release tag)
+build.yml (manual release tag)
   release → verify a published release and resolve its commit on main
   ci      → Go tests, shellcheck, Compose + nginx config validation
   images  → 6 amd64/arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
+  manifest → record image digests on the GitHub Release
+
+deploy.yml (manual release tag)
+  release → verify release, manifest and image availability
   deploy  → opens SSH for this runner's IP only, uploads a bundle,
             runs deploy/remote-deploy.sh, smoke-tests HTTPS, closes SSH
 ```
@@ -46,8 +50,9 @@ on it.
 | --- | --- |
 | [`infra/terraform/`](../infra/terraform) | Network, VM, data volume, reserved IP, cloud-init host bootstrap |
 | [`.github/workflows/terraform.yml`](../.github/workflows/terraform.yml) | Validates on PRs; runs `plan` or `apply` on manual dispatch |
-| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Tests and deployment-config checks on PRs (reused by deploy) |
-| [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) | Manually deploys a published GitHub Release from `main` |
+| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Tests and deployment-config checks on PRs (reused by build) |
+| [`.github/workflows/build.yml`](../.github/workflows/build.yml) | Runs CI and builds images for a published release |
+| [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) | Manually deploys previously built release images |
 | [`deploy/build-bundle.sh`](../deploy/build-bundle.sh) | Runs in Actions; validates secrets and builds the release bundle |
 | [`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) | Runs on the VM; installs secrets, migrates, starts services |
 | [`deploy/tls.sh`](../deploy/tls.sh) | Runs on the VM; issues and renews the Let's Encrypt certificate |
@@ -217,19 +222,24 @@ for it.
 2. On GitHub, open **Releases → Draft a new release**. Choose a new tag such as
    `v1.0.0`, target `main` (or an existing tag on `main`), add or generate release
    notes, and publish the release. A release is a version record, not a deployment.
-3. Go to **Actions → Deploy → Run workflow**, select `main` as the workflow
-   branch, enter the release tag in **release_version**, and run it. The tag must
+3. Go to **Actions → Build release → Run workflow**, select `main`, enter the
+   release tag in **release_version**, and run it. Wait for the build to succeed.
+   The workflow runs CI, builds and publishes the six amd64/arm64 images, and
+   attaches `image-manifest.json` containing their digests to the release. The tag must
    contain only letters, digits, underscores, dots or hyphens, start with a
    letter, digit or underscore, and be at most 128 characters.
+4. Go to **Actions → Deploy → Run workflow**, select `main`, enter the same
+   release tag, and run it. Deployments and redeployments use the recorded
+   digests; they do not rebuild images or rerun CI.
 
-The workflow accepts published releases, including prereleases, only when the tag
-points to a commit on `main` with versioned-deployment support. Releases created
-before that support was merged cannot be deployed this way; publish a new release
-from an updated `main`. The workflow resolves the tag once and uses that commit
-throughout; CI runs against the release code. Pull-request CI and Terraform
-validation retain their existing triggers. The workflow does the following:
+Both workflows accept published releases, including prereleases, only when the
+tag points to a commit on `main` with digest-based deployment support. Releases
+from before that support was merged cannot be built or deployed this way; publish
+a new release from an updated `main`. Each workflow resolves the tag to a commit;
+Deploy rejects a manifest whose release, repository or commit does not match.
+The deployment workflow does the following:
 
-1. Runs CI, then builds and pushes amd64/arm64 images, tagged with the commit SHA.
+1. Validates the release manifest and checks that all six images are available.
 2. Builds the release bundle and opens port 22 to the runner's IP only.
 3. Uploads the bundle as the `deploy` user, verifying the host key against
    Terraform's output.
@@ -242,6 +252,17 @@ validation retain their existing triggers. The workflow does the following:
    6. Obtains the certificate.
 5. Smoke-tests `https://DOMAIN/health` and `/ping` and checks `/version` matches
    the selected release and commit, then always removes the SSH rule.
+
+Pull-request CI does not build the six service images for both architectures;
+those builds happen in **Build release**. CI still builds the nginx image to
+validate its configuration and `/version` endpoint. If an image build fails, no
+manifest is published; the release remains published and some images may already
+have been pushed. Start a new build run or rerun **all** jobs, not just failed
+jobs. A release with an existing manifest cannot be rebuilt: create a new release
+instead. Preserve its manifest and GHCR image versions for future redeployments;
+deleting either prevents deployment. Release administrators can replace assets,
+so restrict release and package write access. Remove any required branch-protection
+checks referring to the old `Build ...` matrix jobs.
 
 To verify manually:
 
