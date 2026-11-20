@@ -43,29 +43,14 @@ run "a1_default" {
   }
 }
 
-run "micro" {
+run "amd_micro_rejected" {
   command = plan
 
   variables {
-    instance_shape      = "VM.Standard.E2.1.Micro"
-    instance_ocpus      = 2
-    instance_memory_gbs = 12
+    instance_shape = "VM.Standard.E2.1.Micro"
   }
 
-  assert {
-    condition     = oci_core_instance.app.shape == "VM.Standard.E2.1.Micro"
-    error_message = "The micro shape must be selected."
-  }
-
-  assert {
-    condition     = data.oci_core_images.oracle_linux.shape == "VM.Standard.E2.1.Micro"
-    error_message = "The Oracle Linux image search must match the micro shape."
-  }
-
-  assert {
-    condition     = length(oci_core_instance.app.shape_config) == 0
-    error_message = "The fixed-size micro must not receive A1 shape configuration."
-  }
+  expect_failures = [var.instance_shape]
 }
 
 run "invalid_shape" {

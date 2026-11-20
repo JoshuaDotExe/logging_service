@@ -62,7 +62,7 @@ jobs:
   images:
     name: Publish ${{ matrix.service }} image
     needs: [release, ci]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     permissions:
       contents: read
@@ -81,7 +81,6 @@ jobs:
         env:
           SERVICE: ${{ matrix.service }}
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${SERVICE}" >>"$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -93,7 +92,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.${{ matrix.service }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.image.outputs.name }}:${{ needs.release.outputs.commit }}
           labels: |

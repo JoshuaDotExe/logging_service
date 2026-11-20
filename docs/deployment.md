@@ -1,10 +1,9 @@
 # Deploying to OCI Always Free
 
 This guide deploys the logging service to one Oracle Cloud (OCI) VM using
-Terraform and GitHub Actions. A1 Flex is the default; the AMD E2.1.Micro shape
-is an experimental, resource-constrained alternative. All deployment runs from
-GitHub, not a laptop. The host runs Oracle Linux 9 for optimal OCI integration
-and minimal resource footprint.
+Terraform and GitHub Actions. Production supports the ARM-based A1 Flex shape.
+All deployment runs from GitHub, not a laptop. The host runs Oracle Linux 9 for
+optimal OCI integration and minimal resource footprint.
 
 ## How it fits together
 
@@ -12,14 +11,14 @@ and minimal resource footprint.
 GitHub Actions                                   OCI (Always Free)
 ──────────────                                   ─────────────────
 terraform.yml  ── Terraform (state in an OCI ─►  VCN, public subnet, NSGs
-  (manual)        Object Storage bucket)         A1 or AMD micro VM (Oracle Linux 9)
+  (manual)        Object Storage bucket)         A1 Flex VM (Oracle Linux 9)
                                                  50 GB data volume → /srv/logging-service
                                                  Reserved public IP
 
 build.yml (manual release tag)
   release → verify a published release and resolve its commit on main
   ci      → Go tests, shellcheck, Compose + nginx config validation
-  images  → 6 amd64/arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
+  images  → 6 arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
   manifest → record image digests on the GitHub Release
 
 deploy.yml (manual release tag)
@@ -39,12 +38,6 @@ On the VM, Docker Compose runs `compose.yaml` plus
 - Redis is not started: the deployed authoriser uses PostgreSQL. Nginx retains
   its per-IP rate limits, but API-key rate-limit settings are not enforced by
   this deployment.
-
-The AMD micro has only 1 GB of RAM and a 1/8-OCPU baseline. The OS, Docker,
-PostgreSQL and all application containers share these resources. This setup has
-not been validated under load on that shape; expect slower startup or possible
-out-of-memory failures, and monitor memory and responsiveness before relying
-on it.
 
 | File | Purpose |
 | --- | --- |
@@ -159,9 +152,9 @@ environment secrets, and pull request workflows never can.
 | Variable | `DEPLOY_SSH_PUBLIC_KEY` | Contents of `deploy_ssh_key.pub` |
 | Variable (optional) | `ADMIN_SSH_PUBLIC_KEY` | Your own SSH public key for the `opc` user |
 | Variable (optional) | `ADMIN_SSH_CIDRS` | JSON list of CIDRs allowed to SSH permanently, e.g. `["203.0.113.10/32"]` |
-| Variable (optional) | `OCI_INSTANCE_SHAPE` | Default `VM.Standard.A1.Flex`; set to `VM.Standard.E2.1.Micro` for the experimental AMD VM |
-| Variable (optional) | `OCI_INSTANCE_OCPUS` | A1 only; default `2` |
-| Variable (optional) | `OCI_INSTANCE_MEMORY_GBS` | A1 only; default `12` |
+| Variable (optional) | `OCI_INSTANCE_SHAPE` | Must be `VM.Standard.A1.Flex` (the default) |
+| Variable (optional) | `OCI_INSTANCE_OCPUS` | Default `2` |
+| Variable (optional) | `OCI_INSTANCE_MEMORY_GBS` | Default `12` |
 | Variable (optional) | `OCI_AVAILABILITY_DOMAIN_INDEX` | Default `0`. Try `1` or `2` on "Out of host capacity" |
 
 ### Environment `production` (used by `deploy.yml`)
@@ -196,16 +189,16 @@ pull images.
    Review the summary. It shows only resource addresses and actions; the full
    plan is never printed because the repository is public.
 2. Run the workflow again with the `apply` action. If it fails with "Out of host
-   capacity", retry later. To try the AMD micro instead, set
-   `OCI_INSTANCE_SHAPE` to `VM.Standard.E2.1.Micro` in the `infrastructure`
-   environment, then plan and apply again. The A1 CPU and memory variables do
-   not apply to the fixed-size micro shape.
+   capacity", retry later or consider a different availability domain.
 
    Changing the availability domain can require replacing the protected data
    volume if a previous partial apply created it. Review the plan before changing
    `OCI_AVAILABILITY_DOMAIN_INDEX`; preserve and migrate data rather than
-   destroying the volume. Changing an existing VM's shape may require a VM
-   replacement, downtime, and available capacity.
+   destroying the volume. If migrating an existing AMD VM, remove or change
+   `OCI_INSTANCE_SHAPE` to `VM.Standard.A1.Flex`, then review the plan carefully:
+   migration requires an ARM VM, may require replacement and downtime, and
+   depends on A1 capacity. Preserve the data volume and backups. New releases
+   built by this workflow cannot run on the old AMD VM.
 3. Copy the three values from the run summary into the `production` environment
    variables: `DEPLOY_HOST`, `DEPLOY_SSH_KNOWN_HOSTS` and `OCI_SSH_NSG_ID`.
 4. Create a DNS **A record** for `DOMAIN` that points at `DEPLOY_HOST`. The IP is
@@ -224,7 +217,7 @@ for it.
    notes, and publish the release. A release is a version record, not a deployment.
 3. Go to **Actions → Build release → Run workflow**, select `main`, enter the
    release tag in **release_version**, and run it. Wait for the build to succeed.
-   The workflow runs CI, builds and publishes the six amd64/arm64 images, and
+   The workflow runs CI, builds and publishes the six arm64 images on native ARM runners, and
    attaches `image-manifest.json` containing their digests to the release. The tag must
    contain only letters, digits, underscores, dots or hyphens, start with a
    letter, digit or underscore, and be at most 128 characters.
@@ -253,7 +246,7 @@ The deployment workflow does the following:
 5. Smoke-tests `https://DOMAIN/health` and `/ping` and checks `/version` matches
    the selected release and commit, then always removes the SSH rule.
 
-Pull-request CI does not build the six service images for both architectures;
+Pull-request CI does not build the six release service images;
 those builds happen in **Build release**. CI still builds the nginx image to
 validate its configuration and `/version` endpoint. If an image build fails, no
 manifest is published; the release remains published and some images may already

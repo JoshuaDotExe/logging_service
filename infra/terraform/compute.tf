@@ -35,12 +35,9 @@ resource "oci_core_instance" "app" {
   display_name        = "${var.name_prefix}-app"
   shape               = var.instance_shape
 
-  dynamic "shape_config" {
-    for_each = var.instance_shape == "VM.Standard.A1.Flex" ? [1] : []
-    content {
-      ocpus         = var.instance_ocpus
-      memory_in_gbs = var.instance_memory_gbs
-    }
+  shape_config {
+    ocpus         = var.instance_ocpus
+    memory_in_gbs = var.instance_memory_gbs
   }
 
   source_details {
