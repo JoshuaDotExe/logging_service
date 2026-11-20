@@ -42,7 +42,7 @@ func (s *logStoreStub) ReadLogsPaginated(_ context.Context, identity logservice.
 	return nil, nil
 }
 
-func (*logStoreStub) DeleteLog(context.Context, uuid.UUID) error {
+func (*logStoreStub) DeleteLog(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 
@@ -62,7 +62,8 @@ func TestLogserviceUsesAuthoriserHTTPService(t *testing.T) {
 		{name: "write permitted", scopes: []string{"read", "write"}, method: http.MethodPost, wantStatus: http.StatusCreated},
 		{name: "write denied", scopes: []string{"read"}, method: http.MethodPost, wantStatus: http.StatusUnauthorized},
 		{name: "empty scopes cannot write", scopes: []string{}, method: http.MethodPost, wantStatus: http.StatusUnauthorized},
-		{name: "read requires only valid key", scopes: []string{}, method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "read permitted", scopes: []string{"read"}, method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "empty scopes cannot read", scopes: []string{}, method: http.MethodGet, wantStatus: http.StatusUnauthorized},
 		{name: "unknown key", readerErr: authoriser.ErrInvalidAPIKey, method: http.MethodPost, wantStatus: http.StatusUnauthorized},
 		{name: "database unavailable", readerErr: errors.New("database unavailable"), method: http.MethodPost, wantStatus: http.StatusServiceUnavailable},
 	} {

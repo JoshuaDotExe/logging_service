@@ -53,7 +53,14 @@ func (s *storeStub) SoftDeleteLogKey(ctx context.Context, id uuid.UUID) error {
 func TestCreateLogKey(t *testing.T) {
 	accountID := uuid.New()
 	seen := make(map[string]bool)
-	for _, scopes := range [][]string{nil, {"write"}, {"read"}, {"read", "write"}} {
+	for _, scopes := range [][]string{
+		nil,
+		{"write"},
+		{"read"},
+		{"delete"},
+		{"read", "write"},
+		{"read", "write", "delete"},
+	} {
 		store := &storeStub{}
 		service := NewService(store)
 		before := time.Now().UTC().Truncate(time.Second)
@@ -101,7 +108,7 @@ func TestCreateLogKeyRejectsInvalidInput(t *testing.T) {
 		{name: "empty scopes", accountID: uuid.New(), scopes: []string{}, wantErr: ErrInvalidScopes},
 		{name: "unknown scope", accountID: uuid.New(), scopes: []string{"admin"}, wantErr: ErrInvalidScopes},
 		{name: "duplicate scopes", accountID: uuid.New(), scopes: []string{"write", "write"}, wantErr: ErrInvalidScopes},
-		{name: "too many scopes", accountID: uuid.New(), scopes: []string{"read", "write", "read"}, wantErr: ErrInvalidScopes},
+		{name: "too many scopes", accountID: uuid.New(), scopes: []string{"read", "write", "delete", "read"}, wantErr: ErrInvalidScopes},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &storeStub{}

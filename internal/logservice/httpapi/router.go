@@ -45,25 +45,25 @@ func NewRouter(
 
 	router.GET(
 		"/logs",
-		handlers.requireAuthorization(authoriser.ScopeNone),
+		handlers.requireAuthorization(authoriser.ScopeRead),
 		handlers.getLogs,
 	)
 
 	router.DELETE(
 		"/log",
-		handlers.requireAuthorization(authoriser.ScopeNone),
+		handlers.requireAuthorization(authoriser.ScopeDelete),
 		handlers.deleteLog,
 	)
 
 	router.DELETE(
 		"/logs",
-		handlers.requireAuthorization(authoriser.ScopeNone),
+		handlers.requireAuthorization(authoriser.ScopeDelete),
 		handlers.deleteLogsByAccountID,
 	)
 
 	router.DELETE(
 		"/logs/account",
-		handlers.requireAuthorization(authoriser.ScopeNone),
+		handlers.requireAuthorization(authoriser.ScopeDelete),
 		handlers.deleteLogsByAccountID,
 	)
 

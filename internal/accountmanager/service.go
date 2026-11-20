@@ -60,8 +60,9 @@ type AccountEntry struct {
 type AccountStore interface {
 	CreateAccount(ctx context.Context, account AccountEntry) error
 	GetAccountDetails(ctx context.Context, username string) (*AccountDetails, error)
-	DeleteAccount(ctx context.Context, username string) error
-	SoftDeleteAccount(ctx context.Context, username string) error
+	DeleteAccount(ctx context.Context, id uuid.UUID) error
+	SoftDeleteAccount(ctx context.Context, id uuid.UUID) error
+	SoftDeleteAccountByID(ctx context.Context, id uuid.UUID) error
 }
 
 type Service struct {
@@ -95,12 +96,11 @@ func (s *Service) CreateAccount(username, email, password string) error {
 	return s.handler.CreateAccount(context.Background(), account)
 }
 
-func (s *Service) DeleteAccount(username string) error {
-	if username == "" {
-		return fmt.Errorf("username is required")
+func (s *Service) DeleteAccount(id uuid.UUID) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("invalid account ID")
 	}
-
-	return s.handler.SoftDeleteAccount(context.Background(), username)
+	return s.handler.SoftDeleteAccountByID(context.Background(), id)
 }
 
 func (s *Service) GetAccountDetails(username string) (*AccountDetails, error) {

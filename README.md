@@ -200,18 +200,20 @@ process liveness.
 {}
 ```
 
-An optional `scopes` array may contain `["write"]`, `["read"]`, or both:
+An optional `scopes` array may contain any non-duplicated combination of
+`"read"`, `"write"`, and `"delete"`:
 
 ```json
-{"scopes":["read","write"]}
+{"scopes":["read","write","delete"]}
 ```
 
 Omitted scopes default to `["write"]`. Empty arrays, null, duplicate scopes, and
 unknown values are rejected. An optional `account_id` is accepted for compatible
 clients only if it matches the authenticated account. All active eligible
-accounts may create their own read/write logging keys; no additional role policy
-is introduced. Account identity is attached to the key and consequently to logs
-written with it.
+accounts may create their own scoped logging keys; no additional role policy is
+introduced. Account identity is attached to the key and consequently to logs
+written with it. Log reads require `read`, writes require `write`, and deletions
+require `delete`.
 
 Creation returns HTTP 201 with `api_key`, the key's database `id`, account ID,
 scopes, creation/expiry timestamps, and status metadata. Keys contain 32 random

@@ -176,6 +176,17 @@ func (h *Handlers) deleteLog(c *gin.Context) {
 		)
 		return
 	}
+	value, exists := c.Get(identityContextKey)
+	identity, valid := value.(logservice.Identity)
+	if !exists || !valid {
+		h.logger.Error("missing deletion identity")
+		c.AbortWithStatusJSON(
+			http.StatusInternalServerError,
+			gin.H{"error": "internal server error"},
+		)
+		return
+	}
+	accountID := uuid.MustParse(identity.AccountID)
 
 	logID, err := uuid.Parse(req.LogID)
 	if err != nil {
@@ -186,7 +197,7 @@ func (h *Handlers) deleteLog(c *gin.Context) {
 		return
 	}
 
-	err = h.service.DeleteLog(c.Request.Context(), logID)
+	err = h.service.DeleteLog(c.Request.Context(), logID, accountID)
 	if err != nil {
 		h.respondError(c, err)
 		return

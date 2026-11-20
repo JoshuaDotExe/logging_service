@@ -13,9 +13,10 @@ var ErrInvalidAPIKey = errors.New("invalid API key")
 type Scope string
 
 const (
-	ScopeNone  Scope = ""
-	ScopeRead  Scope = "read"
-	ScopeWrite Scope = "write"
+	ScopeNone   Scope = ""
+	ScopeRead   Scope = "read"
+	ScopeWrite  Scope = "write"
+	ScopeDelete Scope = "delete"
 )
 
 type Authorization struct {

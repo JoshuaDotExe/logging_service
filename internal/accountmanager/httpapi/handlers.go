@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"logging-service/internal/accountmanager"
+	"logging-service/internal/tokenhandler"
 
 	"github.com/gin-gonic/gin"
 )
@@ -39,4 +40,14 @@ func (h *Handler) CreateAccount(c *gin.Context) {
 		return
 	}
 	c.Status(201)
+}
+
+func (h *Handler) DeleteAccount(c *gin.Context) {
+	accountID := tokenhandler.CurrentAccount(c).ID
+	if err := h.service.DeleteAccount(accountID); err != nil {
+		h.logger.Error("delete account failed", "error", err)
+		c.JSON(500, gin.H{"error": "account deletion failed"})
+		return
+	}
+	c.Status(204)
 }

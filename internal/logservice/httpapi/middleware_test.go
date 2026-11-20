@@ -42,7 +42,7 @@ func (*logStoreStub) ReadLogsPaginated(context.Context, logservice.Identity, int
 	return nil, nil
 }
 
-func (*logStoreStub) DeleteLog(context.Context, uuid.UUID) error {
+func (*logStoreStub) DeleteLog(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 
@@ -85,8 +85,8 @@ func TestAuthorizationMiddlewarePassesScopeAndAccountID(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if authorizer.scope != authoriser.ScopeNone {
-		t.Fatalf("GET requested scope %q, want no specific scope", authorizer.scope)
+	if authorizer.scope != authoriser.ScopeRead {
+		t.Fatalf("GET requested scope %q, want %q", authorizer.scope, authoriser.ScopeRead)
 	}
 }
 

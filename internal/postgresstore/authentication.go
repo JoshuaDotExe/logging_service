@@ -82,15 +82,3 @@ func (s *Store) GetAccountDetailsByID(ctx context.Context, id uuid.UUID) (*accou
 	}
 	return &a, nil
 }
-
-func (s *Store) SoftDeleteAccountByID(ctx context.Context, id uuid.UUID) error {
-	result, err := s.client.Exec(ctx, `UPDATE accounts SET deleted_at = now(), updated_at = now()
-		WHERE id = $1 AND deleted_at IS NULL`, id)
-	if err != nil {
-		return fmt.Errorf("delete own account: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return tokenhandler.ErrAccountIneligible
-	}
-	return nil
-}
