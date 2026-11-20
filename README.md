@@ -155,15 +155,11 @@ Five failed password attempts lock an account for 15 minutes; a successful
 login resets the counter. Add gateway/IP rate limiting before internet exposure:
 account lockouts alone do not prevent distributed guessing or registration abuse.
 
-**New accounts remain `pending_verification` and cannot log in.** This change
-does not implement email verification or an activation endpoint. An account must
-be activated through a trusted administrative process first. In a disposable
-development database only, an administrator can use:
-
-```sql
-UPDATE accounts SET status = 'active', updated_at = now()
-WHERE username = 'example' AND deleted_at IS NULL;
-```
+Email verification is not currently enforced. New accounts are created with an
+`active` status and can log in immediately. The existing
+`pending_verification` status remains supported for records that may have been
+created before this temporary behavior changed, and legacy pending accounts are
+still ineligible until activated.
 
 `GET /account` and `DELETE /account` require
 `Authorization: Bearer <access_token>` and operate only on the token's account.

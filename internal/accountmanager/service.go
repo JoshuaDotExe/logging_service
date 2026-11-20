@@ -89,7 +89,7 @@ func (s *Service) CreateAccount(username, email, password string) error {
 		PasswordHash:      string(passwordHash),
 		PasswordChangedAt: time.Now(),
 		Role:              "member",
-		Status:            "pending_verification",
+		Status:            "active",
 		CreatedAt:         time.Now(),
 		UpdatedAt:         time.Now(),
 	}
