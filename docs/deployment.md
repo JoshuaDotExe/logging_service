@@ -1,7 +1,9 @@
 # Deploying to OCI Always Free
 
-This guide deploys the logging service to one Oracle Cloud (OCI) Ampere A1 VM
-using Terraform and GitHub Actions. All deployment runs from GitHub, not a laptop.
+This guide deploys the logging service to one Oracle Cloud (OCI) VM using
+Terraform and GitHub Actions. A1 Flex is the default; the AMD E2.1.Micro shape
+is an experimental, resource-constrained alternative. All deployment runs from
+GitHub, not a laptop.
 
 ## How it fits together
 
@@ -9,13 +11,13 @@ using Terraform and GitHub Actions. All deployment runs from GitHub, not a lapto
 GitHub Actions                                   OCI (Always Free)
 ──────────────                                   ─────────────────
 terraform.yml  ── Terraform (state in an OCI ─►  VCN, public subnet, NSGs
-  (manual)        Object Storage bucket)         A1.Flex VM (Ubuntu 24.04, cloud-init)
+  (manual)        Object Storage bucket)         A1 or AMD micro VM (Ubuntu 24.04)
                                                  50 GB data volume → /srv/logging-service
                                                  Reserved public IP
 
 deploy.yml (push to main / manual)
   ci      → Go tests, shellcheck, Compose + nginx config validation
-  images  → 6 arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
+  images  → 6 amd64/arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
   deploy  → opens SSH for this runner's IP only, uploads a bundle,
             runs deploy/remote-deploy.sh, smoke-tests HTTPS, closes SSH
 ```
@@ -28,6 +30,15 @@ On the VM, Docker Compose runs `compose.yaml` plus
   without losing data.
 - TLS comes from Let's Encrypt through HTTP-01 via nginx, with renewal checked
   daily by cron. Supply your own certificate to skip Let's Encrypt.
+- Redis is not started: the deployed authoriser uses PostgreSQL. Nginx retains
+  its per-IP rate limits, but API-key rate-limit settings are not enforced by
+  this deployment.
+
+The AMD micro has only 1 GB of RAM and a 1/8-OCPU baseline. The OS, Docker,
+PostgreSQL and all application containers share these resources. This setup has
+not been validated under load on that shape; expect slower startup or possible
+out-of-memory failures, and monitor memory and responsiveness before relying
+on it.
 
 | File | Purpose |
 | --- | --- |
@@ -134,15 +145,16 @@ environment secrets, and pull request workflows never can.
 | Secret | `OCI_USER_OCID` | Terraform user OCID |
 | Secret | `OCI_FINGERPRINT` | Terraform user API key fingerprint |
 | Secret | `OCI_PRIVATE_KEY` | Terraform user API private key (PEM) |
-| Variable | `OCI_REGION` | Home region identifier, e.g. `uk-london-1`. Always Free A1 must be in your home region |
+| Variable | `OCI_REGION` | Home region identifier, e.g. `uk-london-1`. Always Free compute must be in your home region |
 | Variable | `OCI_COMPARTMENT_OCID` | OCID of the `logging-service` child compartment |
 | Variable | `OCI_NAMESPACE` | Object Storage namespace |
 | Variable | `TF_STATE_BUCKET` | `logging-service-tfstate` |
 | Variable | `DEPLOY_SSH_PUBLIC_KEY` | Contents of `deploy_ssh_key.pub` |
 | Variable (optional) | `ADMIN_SSH_PUBLIC_KEY` | Your own SSH public key for the `ubuntu` user |
 | Variable (optional) | `ADMIN_SSH_CIDRS` | JSON list of CIDRs allowed to SSH permanently, e.g. `["203.0.113.10/32"]` |
-| Variable (optional) | `OCI_INSTANCE_OCPUS` | Default `2` |
-| Variable (optional) | `OCI_INSTANCE_MEMORY_GBS` | Default `12` |
+| Variable (optional) | `OCI_INSTANCE_SHAPE` | Default `VM.Standard.A1.Flex`; set to `VM.Standard.E2.1.Micro` for the experimental AMD VM |
+| Variable (optional) | `OCI_INSTANCE_OCPUS` | A1 only; default `2` |
+| Variable (optional) | `OCI_INSTANCE_MEMORY_GBS` | A1 only; default `12` |
 | Variable (optional) | `OCI_AVAILABILITY_DOMAIN_INDEX` | Default `0`. Try `1` or `2` on "Out of host capacity" |
 
 ### Environment `production` (used by `deploy.yml`)
@@ -177,8 +189,16 @@ pull images.
    Review the summary. It shows only resource addresses and actions; the full
    plan is never printed because the repository is public.
 2. Run the workflow again with the `apply` action. If it fails with "Out of host
-   capacity", set `OCI_AVAILABILITY_DOMAIN_INDEX` or retry later. A1 capacity is
-   often scarce.
+   capacity", retry later. To try the AMD micro instead, set
+   `OCI_INSTANCE_SHAPE` to `VM.Standard.E2.1.Micro` in the `infrastructure`
+   environment, then plan and apply again. The A1 CPU and memory variables do
+   not apply to the fixed-size micro shape.
+
+   Changing the availability domain can require replacing the protected data
+   volume if a previous partial apply created it. Review the plan before changing
+   `OCI_AVAILABILITY_DOMAIN_INDEX`; preserve and migrate data rather than
+   destroying the volume. Changing an existing VM's shape may require a VM
+   replacement, downtime, and available capacity.
 3. Copy the three values from the run summary into the `production` environment
    variables: `DEPLOY_HOST`, `DEPLOY_SSH_KNOWN_HOSTS` and `OCI_SSH_NSG_ID`.
 4. Create a DNS **A record** for `DOMAIN` that points at `DEPLOY_HOST`. The IP is
@@ -194,14 +214,14 @@ for it.
 Push to `main`, or go to **Actions → Deploy → Run workflow**. The workflow does
 the following:
 
-1. Runs CI, then builds and pushes the arm64 images, tagged with the commit SHA.
+1. Runs CI, then builds and pushes amd64/arm64 images, tagged with the commit SHA.
 2. Builds the release bundle and opens port 22 to the runner's IP only.
 3. Uploads the bundle as the `deploy` user, verifying the host key against
    Terraform's output.
 4. On the VM:
    1. Writes `.env` and the keys.
    2. Pulls the images.
-   3. Starts PostgreSQL and Redis.
+   3. Starts PostgreSQL.
    4. Runs the migrations.
    5. Starts the services and nginx.
    6. Obtains the certificate.

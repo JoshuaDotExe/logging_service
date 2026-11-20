@@ -115,15 +115,18 @@ jobs:
             logging-service-nginx:ci nginx -t
 
   images:
-    name: Build ${{ matrix.service }} image
+    name: Build ${{ matrix.service }} (${{ matrix.platform.architecture }})
     # Pushes happen in deploy.yml; this only proves the Dockerfiles build.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
+        platform:
+          - {runner: ubuntu-latest, architecture: linux/amd64}
+          - {runner: ubuntu-24.04-arm, architecture: linux/arm64}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,6 +138,6 @@ jobs:
         with:
           context: .
           file: Dockerfile.${{ matrix.service }}
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform.architecture }}
           push: false
           cache-from: type=gha,scope=${{ matrix.service }}

@@ -51,6 +51,17 @@ variable "availability_domain_index" {
   default     = 0
 }
 
+variable "instance_shape" {
+  description = "OCI VM shape: A1 Flex or the experimental AMD micro."
+  type        = string
+  default     = "VM.Standard.A1.Flex"
+
+  validation {
+    condition     = contains(["VM.Standard.A1.Flex", "VM.Standard.E2.1.Micro"], var.instance_shape)
+    error_message = "instance_shape must be VM.Standard.A1.Flex or VM.Standard.E2.1.Micro."
+  }
+}
+
 variable "instance_ocpus" {
   description = "A1 OCPUs. Keep within your tenancy's Always Free A1 allowance."
   type        = number

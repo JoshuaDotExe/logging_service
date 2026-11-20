@@ -48,6 +48,7 @@ jobs:
       - run: terraform fmt -check -recursive -diff
       - run: terraform init -backend=false -input=false
       - run: terraform validate
+      - run: terraform test
 
   run:
     name: Terraform ${{ inputs.action }}
@@ -84,6 +85,7 @@ jobs:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           ADMIN_SSH_PUBLIC_KEY: ${{ vars.ADMIN_SSH_PUBLIC_KEY }}
           ADMIN_SSH_CIDRS: ${{ vars.ADMIN_SSH_CIDRS }}
+          OCI_INSTANCE_SHAPE: ${{ vars.OCI_INSTANCE_SHAPE }}
           OCI_INSTANCE_OCPUS: ${{ vars.OCI_INSTANCE_OCPUS }}
           OCI_INSTANCE_MEMORY_GBS: ${{ vars.OCI_INSTANCE_MEMORY_GBS }}
           OCI_AVAILABILITY_DOMAIN_INDEX: ${{ vars.OCI_AVAILABILITY_DOMAIN_INDEX }}
@@ -120,12 +122,14 @@ jobs:
           jq -n \
             --arg admin_key "$ADMIN_SSH_PUBLIC_KEY" \
             --arg admin_cidrs "$ADMIN_SSH_CIDRS" \
+            --arg shape "$OCI_INSTANCE_SHAPE" \
             --arg ocpus "$OCI_INSTANCE_OCPUS" \
             --arg memory "$OCI_INSTANCE_MEMORY_GBS" \
             --arg ad "$OCI_AVAILABILITY_DOMAIN_INDEX" \
             '{}
             + (if $admin_key != "" then {admin_ssh_public_key: $admin_key} else {} end)
             + (if $admin_cidrs != "" then {admin_ssh_cidrs: ($admin_cidrs | fromjson)} else {} end)
+            + (if $shape != "" then {instance_shape: $shape} else {} end)
             + (if $ocpus != "" then {instance_ocpus: ($ocpus | tonumber)} else {} end)
             + (if $memory != "" then {instance_memory_gbs: ($memory | tonumber)} else {} end)
             + (if $ad != "" then {availability_domain_index: ($ad | tonumber)} else {} end)' \

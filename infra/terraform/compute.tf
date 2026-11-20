@@ -6,7 +6,7 @@ data "oci_core_images" "ubuntu" {
   compartment_id           = var.compartment_ocid
   operating_system         = "Canonical Ubuntu"
   operating_system_version = var.ubuntu_version
-  shape                    = "VM.Standard.A1.Flex"
+  shape                    = var.instance_shape
   state                    = "AVAILABLE"
   sort_by                  = "TIMECREATED"
   sort_order               = "DESC"
@@ -33,11 +33,14 @@ resource "oci_core_instance" "app" {
   compartment_id      = var.compartment_ocid
   availability_domain = local.availability_domain
   display_name        = "${var.name_prefix}-app"
-  shape               = "VM.Standard.A1.Flex"
+  shape               = var.instance_shape
 
-  shape_config {
-    ocpus         = var.instance_ocpus
-    memory_in_gbs = var.instance_memory_gbs
+  dynamic "shape_config" {
+    for_each = var.instance_shape == "VM.Standard.A1.Flex" ? [1] : []
+    content {
+      ocpus         = var.instance_ocpus
+      memory_in_gbs = var.instance_memory_gbs
+    }
   }
 
   source_details {
