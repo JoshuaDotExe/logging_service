@@ -133,7 +133,7 @@ func (h *Handler) respondError(c *gin.Context, err error) {
 	case errors.Is(err, logkeymanager.ErrInvalidKeyID):
 		status, message = http.StatusBadRequest, "invalid key id"
 	case errors.Is(err, logkeymanager.ErrInvalidScopes):
-		status, message = http.StatusBadRequest, "scopes must contain write, read, or both without duplicates"
+		status, message = http.StatusBadRequest, "scopes must contain read, write, or delete without duplicates"
 	case errors.Is(err, logkeymanager.ErrKeyNotFound):
 		status, message = http.StatusNotFound, "log key not found"
 	default:

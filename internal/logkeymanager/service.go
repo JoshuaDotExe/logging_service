@@ -62,12 +62,14 @@ func (s *Service) CreateLogKey(ctx context.Context, accountID uuid.UUID, scopes 
 	if scopes == nil {
 		scopes = []string{string(authoriser.ScopeWrite)}
 	}
-	if len(scopes) == 0 || len(scopes) > 2 {
+	if len(scopes) == 0 || len(scopes) > 3 {
 		return CreatedLogKey{}, ErrInvalidScopes
 	}
 	seen := make(map[string]bool, len(scopes))
 	for _, scope := range scopes {
-		if (scope != string(authoriser.ScopeWrite) && scope != string(authoriser.ScopeRead)) || seen[scope] {
+		if (scope != string(authoriser.ScopeWrite) &&
+			scope != string(authoriser.ScopeRead) &&
+			scope != string(authoriser.ScopeDelete)) || seen[scope] {
 			return CreatedLogKey{}, ErrInvalidScopes
 		}
 		seen[scope] = true
