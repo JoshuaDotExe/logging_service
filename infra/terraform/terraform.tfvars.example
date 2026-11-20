@@ -12,6 +12,7 @@ region           = "uk-london-1"
 compartment_ocid = "ocid1.compartment.oc1..example"
 
 deploy_ssh_public_key = "ssh-ed25519 AAAA... github-actions-deploy"
+# instance_shape       = "VM.Standard.E2.1.Micro"
 # admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 # admin_ssh_cidrs      = ["203.0.113.10/32"]
 # instance_ocpus       = 2

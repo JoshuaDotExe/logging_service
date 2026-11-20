@@ -51,6 +51,17 @@ variable "availability_domain_index" {
   default     = 0
 }
 
+variable "instance_shape" {
+  description = "OCI VM shape: A1 Flex or the experimental AMD micro."
+  type        = string
+  default     = "VM.Standard.A1.Flex"
+
+  validation {
+    condition     = contains(["VM.Standard.A1.Flex", "VM.Standard.E2.1.Micro"], var.instance_shape)
+    error_message = "instance_shape must be VM.Standard.A1.Flex or VM.Standard.E2.1.Micro."
+  }
+}
+
 variable "instance_ocpus" {
   description = "A1 OCPUs. Keep within your tenancy's Always Free A1 allowance."
   type        = number
@@ -63,10 +74,10 @@ variable "instance_memory_gbs" {
   default     = 12
 }
 
-variable "ubuntu_version" {
-  description = "Canonical Ubuntu release used for the instance image."
+variable "oracle_linux_version" {
+  description = "Oracle Linux release used for the instance image."
   type        = string
-  default     = "24.04"
+  default     = "9"
 }
 
 variable "boot_volume_size_gbs" {
@@ -92,7 +103,7 @@ variable "deploy_ssh_public_key" {
 }
 
 variable "admin_ssh_public_key" {
-  description = "Optional OpenSSH public key for the default `ubuntu` admin user. Empty disables admin key injection."
+  description = "Optional OpenSSH public key for the default `opc` admin user. Empty disables admin key injection."
   type        = string
   default     = ""
 }

@@ -85,11 +85,11 @@ compose config --quiet
 
 log "pulling images"
 docker login ghcr.io --username "$GHCR_USER" --password-stdin <"$INCOMING/runtime/ghcr_token" >/dev/null
-compose pull --quiet "${APP_SERVICES[@]}" nginx postgres redis postgres_migrate
+compose pull --quiet "${APP_SERVICES[@]}" nginx postgres postgres_migrate
 docker logout ghcr.io >/dev/null
 
 log "starting data services"
-compose up --detach --no-build --wait --wait-timeout 180 postgres redis
+compose up --detach --no-build --wait --wait-timeout 180 postgres
 
 log "running migrations"
 compose run --rm --no-deps postgres_migrate

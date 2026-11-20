@@ -23,7 +23,7 @@ make deploy
 
 Nginx is the only host-facing application service. It terminates TLS and routes
 `/account`, `/login`, `/logkey/*`, `/logs`, `/log`, and `/ping` to their
-respective backends. Authoriser, Token Handler, PostgreSQL, and Redis are not
+respective backends. Authoriser, Token Handler, and PostgreSQL are not
 published to the host.
 
 Provide a TLS certificate and matching private key outside the repository:
@@ -47,18 +47,18 @@ timeouts. Application-level account and API-key quotas are still required:
 Nginx limits are an edge-abuse control, not a complete authorization or quota
 system.
 
-**Destructive: every `make deploy` deletes all PostgreSQL accounts, logs and API keys,
-as well as Redis cache and rate-limit state. Do not use this target in production.**
+**Destructive: every `make deploy` deletes all PostgreSQL accounts, logs and API keys.
+Do not use this target in production.**
 
 This rebuilds the app from the current local source, checking for updated build
 base images while retaining valid build cache. After a successful build, it stops
-the app and migration container, removes PostgreSQL and Redis containers and
-their anonymous volumes, starts fresh databases, applies the initial schema,
+the app and migration container, removes the PostgreSQL container and its
+anonymous volume, starts a fresh database, applies the initial schema,
 and recreates the app container using the new image. A failed step stops
 deployment, but cannot restore data already deleted.
 
-Deployment does not automatically pull updated PostgreSQL or Redis images.
-Pin their versions and update them deliberately, particularly for PostgreSQL
+Deployment does not automatically pull updated PostgreSQL images.
+Pin the version and update it deliberately, particularly for PostgreSQL
 major upgrades. The reset relies on the current Compose configuration using
 anonymous volumes and no database bind mounts. Named volumes and bind mounts
 are not removed by this command. Before adding persistent storage or deploying

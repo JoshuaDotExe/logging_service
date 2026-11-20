@@ -90,10 +90,6 @@ services:
       - accountmanager
       - logkeymanager
       - logservice
-  redis:
-    image: "redis:alpine"
-    networks:
-      - backend
   postgres:
     image: "postgres:alpine"
     environment:

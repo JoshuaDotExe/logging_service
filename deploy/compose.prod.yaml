@@ -81,13 +81,6 @@ services:
         condition: service_healthy
       logservice:
         condition: service_healthy
-  redis:
-    <<: *app
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
   postgres:
     <<: *app
     # Pinned major version: the data directory is not compatible across majors.
