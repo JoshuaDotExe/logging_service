@@ -7,6 +7,12 @@
  - Authoriser
  - Token Handler
 
+## Production deployment
+
+Deployment to an OCI Always Free VM uses Terraform and GitHub Actions. See
+[docs/deployment.md](docs/deployment.md) for setup, the GitHub secrets and
+variables to configure, and operations.
+
 ## Development deployment
 
 With Docker Compose v2 and Make installed, configure `.env`, then run:

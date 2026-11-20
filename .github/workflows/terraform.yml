@@ -1,0 +1,194 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: plan shows the changes; apply makes them
+        type: choice
+        options: [plan, apply]
+        default: plan
+      replace_instance:
+        description: Rebuild the VM (data volume and public IP are kept)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+jobs:
+  validate:
+    name: Validate
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.17"
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  run:
+    name: Terraform ${{ inputs.action }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: infrastructure
+    concurrency:
+      group: terraform-state
+      cancel-in-progress: false
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+      TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+      TF_VAR_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+      TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
+      TF_VAR_deploy_ssh_public_key: ${{ vars.DEPLOY_SSH_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.17"
+          terraform_wrapper: false
+
+      - name: Write backend and optional variables
+        env:
+          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          ADMIN_SSH_PUBLIC_KEY: ${{ vars.ADMIN_SSH_PUBLIC_KEY }}
+          ADMIN_SSH_CIDRS: ${{ vars.ADMIN_SSH_CIDRS }}
+          OCI_INSTANCE_OCPUS: ${{ vars.OCI_INSTANCE_OCPUS }}
+          OCI_INSTANCE_MEMORY_GBS: ${{ vars.OCI_INSTANCE_MEMORY_GBS }}
+          OCI_AVAILABILITY_DOMAIN_INDEX: ${{ vars.OCI_AVAILABILITY_DOMAIN_INDEX }}
+        run: |
+          missing=0
+          for name in TF_VAR_tenancy_ocid TF_VAR_user_ocid TF_VAR_fingerprint TF_VAR_private_key TF_VAR_region \
+            TF_VAR_compartment_ocid TF_VAR_deploy_ssh_public_key OCI_NAMESPACE TF_STATE_BUCKET; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::$name is empty; add the matching secret or variable to the infrastructure environment"
+              missing=1
+            fi
+          done
+          ((missing == 0)) || exit 1
+
+          umask 077
+          printf '%s\n' "$TF_VAR_private_key" >"$RUNNER_TEMP/oci_api_key.pem"
+          jq -n \
+            --arg bucket "$TF_STATE_BUCKET" \
+            --arg namespace "$OCI_NAMESPACE" \
+            --arg region "$TF_VAR_region" \
+            --arg tenancy "$TF_VAR_tenancy_ocid" \
+            --arg user "$TF_VAR_user_ocid" \
+            --arg fingerprint "$TF_VAR_fingerprint" \
+            --arg key "$RUNNER_TEMP/oci_api_key.pem" \
+            '"bucket = \($bucket | @json)
+          namespace = \($namespace | @json)
+          region = \($region | @json)
+          tenancy_ocid = \($tenancy | @json)
+          user_ocid = \($user | @json)
+          fingerprint = \($fingerprint | @json)
+          private_key_path = \($key | @json)"' -r >"$RUNNER_TEMP/backend.hcl"
+
+          # Only set optional variables that were provided so Terraform defaults apply otherwise.
+          jq -n \
+            --arg admin_key "$ADMIN_SSH_PUBLIC_KEY" \
+            --arg admin_cidrs "$ADMIN_SSH_CIDRS" \
+            --arg ocpus "$OCI_INSTANCE_OCPUS" \
+            --arg memory "$OCI_INSTANCE_MEMORY_GBS" \
+            --arg ad "$OCI_AVAILABILITY_DOMAIN_INDEX" \
+            '{}
+            + (if $admin_key != "" then {admin_ssh_public_key: $admin_key} else {} end)
+            + (if $admin_cidrs != "" then {admin_ssh_cidrs: ($admin_cidrs | fromjson)} else {} end)
+            + (if $ocpus != "" then {instance_ocpus: ($ocpus | tonumber)} else {} end)
+            + (if $memory != "" then {instance_memory_gbs: ($memory | tonumber)} else {} end)
+            + (if $ad != "" then {availability_domain_index: ($ad | tonumber)} else {} end)' \
+            >"$RUNNER_TEMP/optional.tfvars.json"
+
+      - name: Init
+        run: terraform init -input=false -backend-config="$RUNNER_TEMP/backend.hcl"
+
+      - name: Plan
+        # The repository is public, so only a resource/action summary is printed.
+        env:
+          REPLACE_INSTANCE: ${{ inputs.replace_instance }}
+        run: |
+          replace=()
+          if [[ $REPLACE_INSTANCE == true ]]; then
+            replace=(-replace=oci_core_instance.app)
+          fi
+          set +e
+          terraform plan -no-color -input=false -lock-timeout=5m -detailed-exitcode "${replace[@]}" \
+            -var-file="$RUNNER_TEMP/optional.tfvars.json" -out=tfplan >"$RUNNER_TEMP/plan.log" 2>&1
+          status=$?
+          set -e
+          if ((status == 1)); then
+            # Print only Terraform's diagnostics (sensitive values are redacted there).
+            sed -n '/^\(Error\|Warning\):/,$p' "$RUNNER_TEMP/plan.log"
+            echo "::error::terraform plan failed"
+            exit 1
+          fi
+          {
+            echo "### Terraform plan"
+            echo '```'
+            terraform show -json tfplan |
+              jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/"))\t\(.address)"'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if ((status == 0)); then
+            echo "No changes." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Apply
+        if: inputs.action == 'apply'
+        run: |
+          if ! terraform apply -no-color -input=false -lock-timeout=5m -auto-approve tfplan >"$RUNNER_TEMP/apply.log" 2>&1; then
+            sed -n '/^\(Error\|Warning\):/,$p' "$RUNNER_TEMP/apply.log"
+            echo "::error::terraform apply failed"
+            exit 1
+          fi
+          echo "Apply complete."
+
+      - name: Outputs
+        if: inputs.action == 'apply'
+        run: |
+          {
+            echo "### Copy these into the production environment variables"
+            echo '| Variable | Value |'
+            echo '| --- | --- |'
+            echo "| DEPLOY_HOST | \`$(terraform output -raw public_ip)\` |"
+            echo "| DEPLOY_SSH_KNOWN_HOSTS | \`$(terraform output -raw ssh_known_hosts)\` |"
+            echo "| OCI_SSH_NSG_ID | \`$(terraform output -raw ssh_nsg_id)\` |"
+            echo
+            echo "Point the DNS A record for your domain at DEPLOY_HOST."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/oci_api_key.pem" "$RUNNER_TEMP/backend.hcl" tfplan "$RUNNER_TEMP"/*.log

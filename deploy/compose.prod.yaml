@@ -1,0 +1,97 @@
+# Production overlay for the OCI host. Used together with ../compose.yaml by
+# deploy/remote-deploy.sh; it is not intended for local development.
+#
+#   docker compose -f compose.yaml -f deploy/compose.prod.yaml ...
+#
+# Required variables (written to /opt/logging-service/.env by the deploy workflow):
+#   IMAGE_REGISTRY, IMAGE_TAG, DEPLOY_ROOT, POSTGRES_DATA_DIR
+
+x-app: &app
+  restart: unless-stopped
+
+services:
+  authoriser:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/authoriser:${IMAGE_TAG:?}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${AUTHORISER_API_PORT}/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+  logkeymanager:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/logkeymanager:${IMAGE_TAG:?}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOGKEYMANAGER_API_PORT}/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+  logservice:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/logservice:${IMAGE_TAG:?}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOGSERVICE_API_PORT}/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+      authoriser:
+        condition: service_healthy
+  accountmanager:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/accountmanager:${IMAGE_TAG:?}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${ACCOUNTMANAGER_API_PORT}/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tokenhandler:
+        condition: service_healthy
+  tokenhandler:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/tokenhandler:${IMAGE_TAG:?}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${TOKENHANDLER_API_PORT}/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      postgres:
+        condition: service_healthy
+  nginx:
+    <<: *app
+    image: "${IMAGE_REGISTRY:?}/nginx:${IMAGE_TAG:?}"
+    volumes:
+      - "${DEPLOY_ROOT:?}/acme:/var/www/acme:ro"
+    depends_on:
+      accountmanager:
+        condition: service_healthy
+      logkeymanager:
+        condition: service_healthy
+      logservice:
+        condition: service_healthy
+  redis:
+    <<: *app
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  postgres:
+    <<: *app
+    # Pinned major version: the data directory is not compatible across majors.
+    image: postgres:18-alpine
+    stop_grace_period: 60s
+    volumes:
+      - "${POSTGRES_DATA_DIR:?}:/var/lib/postgresql"
