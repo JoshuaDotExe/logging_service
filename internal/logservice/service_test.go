@@ -21,7 +21,7 @@ func (*logHandlerStub) ReadLogsPaginated(context.Context, Identity, int, LogCurs
 	return nil, nil
 }
 
-func (*logHandlerStub) DeleteLog(context.Context, uuid.UUID) error {
+func (*logHandlerStub) DeleteLog(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 

@@ -35,7 +35,7 @@ type LogCursor struct {
 type LogHandler interface {
 	WriteLog(ctx context.Context, entry Log) error
 	ReadLogsPaginated(ctx context.Context, identity Identity, limit int, cursor LogCursor) ([]Log, error)
-	DeleteLog(ctx context.Context, logID uuid.UUID) error
+	DeleteLog(ctx context.Context, logID uuid.UUID, accountID uuid.UUID) error
 	DeleteLogsByAccountID(ctx context.Context, accountID uuid.UUID) error
 }
 
@@ -120,11 +120,15 @@ func isUUID(value string) bool {
 func (s *Service) DeleteLog(
 	ctx context.Context,
 	logID uuid.UUID,
+	accountID uuid.UUID,
 ) error {
 	if logID == uuid.Nil {
 		return ErrInvalidMessage
 	}
-	err := s.logs.DeleteLog(ctx, logID)
+	if accountID == uuid.Nil {
+		return ErrInvalidMessage
+	}
+	err := s.logs.DeleteLog(ctx, logID, accountID)
 	if err != nil {
 		return fmt.Errorf("delete log: %w", err)
 	}

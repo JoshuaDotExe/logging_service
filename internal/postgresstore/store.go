@@ -242,12 +242,14 @@ func (s *Store) DeleteLogsByAccountID(ctx context.Context, accountID uuid.UUID) 
 	return nil
 }
 
-func (s *Store) DeleteLog(ctx context.Context, logID uuid.UUID) error {
+func (s *Store) DeleteLog(ctx context.Context, logID uuid.UUID, accountID uuid.UUID) error {
 	result, err := s.client.Exec(
 		ctx,
 		`DELETE FROM logs
-		 WHERE id = $1`,
+		 WHERE id = $1
+		   AND account_id = $2`,
 		logID,
+		accountID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("delete log: %w", err)

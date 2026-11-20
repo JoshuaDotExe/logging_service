@@ -42,7 +42,7 @@ func (*logStoreStub) ReadLogsPaginated(context.Context, logservice.Identity, int
 	return nil, nil
 }
 
-func (*logStoreStub) DeleteLog(context.Context, uuid.UUID) error {
+func (*logStoreStub) DeleteLog(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 
