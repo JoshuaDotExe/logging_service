@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      POSTGRESSTORE_TEST_URL: postgres://ci:ci@localhost:5432/ci?sslmode=disable
+      REDISSTORE_TEST_ADDR: localhost:6379
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [[ -n $unformatted ]]; then
+            echo "::error::These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  deploy-config:
+    name: Deployment config
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Shellcheck deploy scripts
+        run: shellcheck deploy/*.sh
+
+      - name: Build a release bundle with dummy values
+        env:
+          DOMAIN: logs.example.com
+          ACME_EMAIL: ci@example.com
+          GHCR_TOKEN: dummy
+        run: |
+          JWT_PRIVATE_KEY=$(openssl genpkey -algorithm ed25519)
+          POSTGRES_PASSWORD=$(openssl rand -hex 32)
+          TOKEN_SERVICE_KEY=$(openssl rand -hex 32)
+          export JWT_PRIVATE_KEY POSTGRES_PASSWORD TOKEN_SERVICE_KEY
+          deploy/build-bundle.sh "$RUNNER_TEMP/bundle"
+
+      - name: Validate production Compose config
+        working-directory: ${{ runner.temp }}/bundle/app
+        run: |
+          docker compose --project-directory . --env-file ../runtime/env \
+            -f compose.yaml -f deploy/compose.prod.yaml config --quiet
+
+      - name: Validate nginx config
+        run: |
+          tmp="$RUNNER_TEMP/nginx"
+          mkdir -p "$tmp"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+            -subj /CN=logs.example.com -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
+          chmod 644 "$tmp/key.pem"
+          docker build -q -f Dockerfile.nginx -t logging-service-nginx:ci .
+          docker run --rm \
+            --add-host accountmanager:127.0.0.1 \
+            --add-host logkeymanager:127.0.0.1 \
+            --add-host logservice:127.0.0.1 \
+            -e ACCOUNTMANAGER_API_PORT=8081 \
+            -e LOGKEYMANAGER_API_PORT=8082 \
+            -e LOGSERVICE_API_PORT=8080 \
+            -e NGINX_SERVER_NAME=logs.example.com \
+            -e 'NGINX_ENVSUBST_FILTER=^(ACCOUNTMANAGER_API_PORT|LOGKEYMANAGER_API_PORT|LOGSERVICE_API_PORT|NGINX_SERVER_NAME)$' \
+            -v "$tmp/cert.pem:/run/secrets/nginx_tls_certificate:ro" \
+            -v "$tmp/key.pem:/run/secrets/nginx_tls_private_key:ro" \
+            logging-service-nginx:ci nginx -t
+
+  images:
+    name: Build ${{ matrix.service }} image
+    # Pushes happen in deploy.yml; this only proves the Dockerfiles build.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.service }}
+          platforms: linux/arm64
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}

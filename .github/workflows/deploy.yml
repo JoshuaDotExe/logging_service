@@ -1,0 +1,219 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+      - "**.md"
+  workflow_dispatch:
+    inputs:
+      force_recreate:
+        description: Recreate every application container (needed after rotating JWT_PRIVATE_KEY or TOKEN_SERVICE_KEY without a code change)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  images:
+    name: Publish ${{ matrix.service }} image
+    needs: ci
+    # Native Arm runner (free for public repositories) matches the Ampere A1 host.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [accountmanager, authoriser, logkeymanager, logservice, tokenhandler, nginx]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Image name
+        id: image
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${SERVICE}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.service }}
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:main
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to OCI
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://${{ vars.DOMAIN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DOMAIN: ${{ vars.DOMAIN }}
+      OCI_SSH_NSG_ID: ${{ vars.OCI_SSH_NSG_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check configuration
+        env:
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ vars.DEPLOY_SSH_KNOWN_HOSTS }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
+        run: |
+          missing=0
+          for name in DEPLOY_HOST DOMAIN OCI_SSH_NSG_ID DEPLOY_SSH_KNOWN_HOSTS OCI_REGION; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::Variable $name is not set on the production environment"
+              missing=1
+            fi
+          done
+          [[ $DEPLOY_HOST =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo "::error::DEPLOY_HOST must be an IPv4 address"; missing=1; }
+          exit $missing
+
+      - name: Build release bundle
+        env:
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          JWT_ISSUER: ${{ vars.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TOKEN_SERVICE_KEY: ${{ secrets.TOKEN_SERVICE_KEY }}
+          JWT_PRIVATE_KEY: ${{ secrets.JWT_PRIVATE_KEY }}
+          TLS_CERTIFICATE: ${{ secrets.TLS_CERTIFICATE }}
+          TLS_PRIVATE_KEY: ${{ secrets.TLS_PRIVATE_KEY }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_RECREATE: ${{ inputs.force_recreate && 'true' || 'false' }}
+        run: deploy/build-bundle.sh "$RUNNER_TEMP/bundle"
+
+      - name: Install OCI CLI
+        run: pipx install oci-cli
+
+      - name: Configure OCI CLI
+        env:
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
+        run: |
+          umask 077
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_PRIVATE_KEY" >~/.oci/oci_api_key.pem
+          cat >~/.oci/config <<EOF
+          [DEFAULT]
+          user=${OCI_USER_OCID}
+          fingerprint=${OCI_FINGERPRINT}
+          tenancy=${OCI_TENANCY_OCID}
+          region=${OCI_REGION}
+          key_file=${HOME}/.oci/oci_api_key.pem
+          EOF
+
+      - name: Open SSH from this runner
+        run: deploy/ssh-access.sh open
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ vars.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" >~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" >~/.ssh/known_hosts
+          cat >~/.ssh/config <<EOF
+          Host deploy-target
+            HostName ${DEPLOY_HOST}
+            User deploy
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ConnectTimeout 10
+            ServerAliveInterval 15
+            ServerAliveCountMax 8
+          EOF
+
+      - name: Wait for SSH
+        run: |
+          # NSG rule propagation and a freshly booted host can each take a minute.
+          for attempt in $(seq 1 30); do
+            if ssh -o BatchMode=yes deploy-target true 2>/dev/null; then
+              echo "SSH is reachable."
+              exit 0
+            fi
+            echo "SSH not reachable yet (attempt $attempt/30)"
+            sleep 10
+          done
+          echo "::error::Could not reach $DEPLOY_HOST over SSH"
+          ssh -o BatchMode=yes -v deploy-target true || true
+          exit 1
+
+      - name: Upload bundle and deploy
+        run: |
+          tar -C "$RUNNER_TEMP/bundle" -czf - . |
+            ssh -o BatchMode=yes deploy-target \
+              'umask 077 && rm -rf /opt/logging-service/incoming && mkdir -p /opt/logging-service/incoming && tar -xzf - -C /opt/logging-service/incoming'
+          rm -rf "$RUNNER_TEMP/bundle"
+          ssh -o BatchMode=yes deploy-target 'bash /opt/logging-service/incoming/app/deploy/remote-deploy.sh'
+
+      - name: Smoke test
+        run: |
+          for path in /health /ping; do
+            for _ in $(seq 1 10); do
+              if curl -fsS --max-time 10 --resolve "$DOMAIN:443:$DEPLOY_HOST" "https://$DOMAIN$path" -o /dev/null; then
+                echo "https://$DOMAIN$path OK"
+                continue 2
+              fi
+              sleep 6
+            done
+            echo "::error::https://$DOMAIN$path did not respond successfully"
+            exit 1
+          done
+
+      - name: Close SSH and remove credentials
+        if: always()
+        run: |
+          if [[ -f ~/.oci/config ]]; then
+            deploy/ssh-access.sh close || echo "::warning::Failed to remove transient SSH rule; it will be removed by the next deploy"
+          fi
+          rm -rf ~/.ssh/deploy_key ~/.oci "$RUNNER_TEMP/bundle"

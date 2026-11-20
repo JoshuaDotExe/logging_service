@@ -7,6 +7,13 @@ server {
     listen [::]:80;
     server_name ${NGINX_SERVER_NAME};
 
+    # Let's Encrypt HTTP-01 challenges. The directory is only mounted in production.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
     location / {
         return 308 https://${NGINX_SERVER_NAME}$request_uri;
     }

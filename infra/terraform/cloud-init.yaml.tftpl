@@ -1,0 +1,132 @@
+#cloud-config
+# Rendered by Terraform templatefile(): literal dollar-brace sequences must be written as $${...}.
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - openssl
+  - unattended-upgrades
+
+ssh_pwauth: false
+disable_root: true
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_private_key)}
+  ed25519_public: ${host_public_key}
+
+users:
+  - default
+  - name: deploy
+    gecos: GitHub Actions deploy
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${deploy_ssh_public_key}
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-logging-service.conf
+    permissions: "0644"
+    content: |
+      HostKey /etc/ssh/ssh_host_ed25519_key
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AuthenticationMethods publickey
+      MaxAuthTries 3
+      AllowUsers deploy ubuntu
+      AllowTcpForwarding no
+      AllowAgentForwarding no
+      X11Forwarding no
+
+  - path: /etc/apt/apt.conf.d/52logging-service-upgrades
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "5" },
+        "live-restore": true
+      }
+
+  # Never let PostgreSQL start on the boot disk if the data volume is missing.
+  - path: /etc/systemd/system/docker.service.d/10-data-volume.conf
+    permissions: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor=/srv/logging-service
+
+  - path: /usr/local/sbin/logging-service-data-volume
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      MOUNT=/srv/logging-service
+      LABEL=lsdata
+
+      if ! blkid -L "$LABEL" >/dev/null 2>&1; then
+        dev=""
+        root_disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")
+        for _ in $(seq 1 120); do
+          if [ -e /dev/oracleoci/oraclevdb ]; then
+            dev=$(readlink -f /dev/oracleoci/oraclevdb)
+            break
+          fi
+          candidates=$(lsblk -dn -o NAME,TYPE | awk -v r="$root_disk" '$2 == "disk" && $1 != r { print $1 }')
+          if [ "$(printf '%s\n' "$candidates" | grep -c .)" = "1" ]; then
+            dev="/dev/$candidates"
+            break
+          fi
+          sleep 5
+        done
+        if [ -z "$dev" ]; then
+          echo "data volume was not attached within 10 minutes" >&2
+          exit 1
+        fi
+        if [ -n "$(blkid -o value -s TYPE "$dev" || true)" ]; then
+          echo "$dev already has a filesystem without label $LABEL; refusing to format it" >&2
+          exit 1
+        fi
+        mkfs.ext4 -L "$LABEL" "$dev"
+      fi
+
+      mkdir -p "$MOUNT"
+      if ! grep -q "^LABEL=$LABEL " /etc/fstab; then
+        echo "LABEL=$LABEL $MOUNT ext4 defaults,nofail,x-systemd.device-timeout=120 0 2" >> /etc/fstab
+      fi
+      systemctl daemon-reload
+      mountpoint -q "$MOUNT" || mount "$MOUNT"
+      install -d -m 0700 "$MOUNT/postgres"
+
+  - path: /usr/local/sbin/logging-service-bootstrap
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+      /usr/local/sbin/logging-service-data-volume
+
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      # Membership of the docker group is root-equivalent; deploy is the only such user.
+      usermod -aG docker deploy
+      install -d -o deploy -g deploy -m 0750 /opt/logging-service
+      systemctl daemon-reload
+      systemctl enable --now docker
+      systemctl try-restart ssh || true
+      touch /var/lib/logging-service-bootstrap.done
+
+runcmd:
+  - [bash, /usr/local/sbin/logging-service-bootstrap]
