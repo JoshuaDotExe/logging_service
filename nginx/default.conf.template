@@ -56,6 +56,12 @@ server {
         return 200 "ok\n";
     }
 
+    location = /version {
+        access_log off;
+        default_type application/json;
+        return 200 '{"version":"${RELEASE_VERSION}","commit":"${RELEASE_COMMIT}"}\n';
+    }
+
     location = /account {
         limit_req zone=account_ingress burst=10 nodelay;
         client_max_body_size 4k;

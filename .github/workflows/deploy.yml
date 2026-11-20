@@ -1,14 +1,12 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "infra/**"
-      - ".github/workflows/terraform.yml"
-      - "**.md"
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Published GitHub Release tag to deploy (e.g. v1.0.0)
+        type: string
+        required: true
       force_recreate:
         description: Recreate every application container (needed after rotating JWT_PRIVATE_KEY or TOKEN_SERVICE_KEY without a code change)
         type: boolean
@@ -22,14 +20,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Require main workflow branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow from the main branch"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release and resolve commit
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: bash deploy/resolve-release.sh
+
   ci:
+    needs: release
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.release.outputs.commit }}
     permissions:
       contents: read
 
   images:
     name: Publish ${{ matrix.service }} image
-    needs: ci
+    needs: [release, ci]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -42,6 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.release.outputs.commit }}
           persist-credentials: false
 
       - name: Image name
@@ -67,17 +96,16 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
-            ${{ steps.image.outputs.name }}:main
+            ${{ steps.image.outputs.name }}:${{ needs.release.outputs.commit }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.commit }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   deploy:
     name: Deploy to OCI
-    needs: images
+    needs: [release, images]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -90,9 +118,12 @@ jobs:
       DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       OCI_SSH_NSG_ID: ${{ vars.OCI_SSH_NSG_ID }}
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.release.outputs.commit }}
           persist-credentials: false
 
       - name: Check configuration
@@ -210,6 +241,17 @@ jobs:
             echo "::error::https://$DOMAIN$path did not respond successfully"
             exit 1
           done
+          for _ in $(seq 1 10); do
+            if curl -fsS --max-time 10 --resolve "$DOMAIN:443:$DEPLOY_HOST" "https://$DOMAIN/version" |
+              jq -e --arg version "$RELEASE_VERSION" --arg commit "$RELEASE_COMMIT" \
+                '.version == $version and .commit == $commit' >/dev/null; then
+              echo "https://$DOMAIN/version matches $RELEASE_VERSION ($RELEASE_COMMIT)"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::https://$DOMAIN/version did not match the selected release"
+          exit 1
 
       - name: Close SSH and remove credentials
         if: always()

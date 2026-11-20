@@ -16,7 +16,8 @@ terraform.yml  ── Terraform (state in an OCI ─►  VCN, public subnet, NSG
                                                  50 GB data volume → /srv/logging-service
                                                  Reserved public IP
 
-deploy.yml (push to main / manual)
+deploy.yml (manual release tag)
+  release → verify a published release and resolve its commit on main
   ci      → Go tests, shellcheck, Compose + nginx config validation
   images  → 6 amd64/arm64 images → ghcr.io/<owner>/<repo>/<service>:<sha>
   deploy  → opens SSH for this runner's IP only, uploads a bundle,
@@ -46,7 +47,7 @@ on it.
 | [`infra/terraform/`](../infra/terraform) | Network, VM, data volume, reserved IP, cloud-init host bootstrap |
 | [`.github/workflows/terraform.yml`](../.github/workflows/terraform.yml) | Validates on PRs; runs `plan` or `apply` on manual dispatch |
 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Tests and deployment-config checks on PRs (reused by deploy) |
-| [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) | Builds and pushes images, then deploys, on every push to `main` |
+| [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) | Manually deploys a published GitHub Release from `main` |
 | [`deploy/build-bundle.sh`](../deploy/build-bundle.sh) | Runs in Actions; validates secrets and builds the release bundle |
 | [`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) | Runs on the VM; installs secrets, migrates, starts services |
 | [`deploy/tls.sh`](../deploy/tls.sh) | Runs on the VM; issues and renews the Let's Encrypt certificate |
@@ -212,8 +213,21 @@ for it.
 
 ## 5. Deploy
 
-Push to `main`, or go to **Actions → Deploy → Run workflow**. The workflow does
-the following:
+1. Merge changes into `main`. Deployments are not triggered by a push or merge.
+2. On GitHub, open **Releases → Draft a new release**. Choose a new tag such as
+   `v1.0.0`, target `main` (or an existing tag on `main`), add or generate release
+   notes, and publish the release. A release is a version record, not a deployment.
+3. Go to **Actions → Deploy → Run workflow**, select `main` as the workflow
+   branch, enter the release tag in **release_version**, and run it. The tag must
+   contain only letters, digits, underscores, dots or hyphens, start with a
+   letter, digit or underscore, and be at most 128 characters.
+
+The workflow accepts published releases, including prereleases, only when the tag
+points to a commit on `main` with versioned-deployment support. Releases created
+before that support was merged cannot be deployed this way; publish a new release
+from an updated `main`. The workflow resolves the tag once and uses that commit
+throughout; CI runs against the release code. Pull-request CI and Terraform
+validation retain their existing triggers. The workflow does the following:
 
 1. Runs CI, then builds and pushes amd64/arm64 images, tagged with the commit SHA.
 2. Builds the release bundle and opens port 22 to the runner's IP only.
@@ -226,20 +240,28 @@ the following:
    4. Runs the migrations.
    5. Starts the services and nginx.
    6. Obtains the certificate.
-5. Smoke-tests `https://DOMAIN/health` and `/ping`, then always removes the SSH
-   rule.
+5. Smoke-tests `https://DOMAIN/health` and `/ping` and checks `/version` matches
+   the selected release and commit, then always removes the SSH rule.
 
 To verify manually:
 
 ```bash
 curl -fsS https://logs.example.com/health
 curl -fsS https://logs.example.com/ping
+curl -fsS https://logs.example.com/version
 ```
+
+The public `/version` response is JSON, for example
+`{"version":"v1.0.0","commit":"<full commit SHA>"}`. It reports the metadata
+configured for the deployment, not the independent health of every container.
+Local Compose runs report `development` for both fields unless overridden.
+Check the Actions run for deployment success; publishing a release alone does
+not mean it is deployed.
 
 ## Operations
 
 - **Rotate `JWT_PRIVATE_KEY` or `TOKEN_SERVICE_KEY`**: update the secret, then run
-  **Deploy** manually with **force_recreate** ticked. Existing JWTs stop
+  **Deploy** manually with the current release tag and **force_recreate** ticked. Existing JWTs stop
   validating.
 - **Rotate `POSTGRES_PASSWORD`**: PostgreSQL reads the password only on first
   initialisation. Run `ALTER USER logging WITH PASSWORD '...'` on the host first,
@@ -248,6 +270,9 @@ curl -fsS https://logs.example.com/ping
   with **replace_instance** ticked, `plan` first and then `apply`. The data
   volume, public IP and SSH host key are kept, so no GitHub variables change.
   Then run **Deploy**.
+- **Roll back**: run **Deploy** with an earlier supported release tag only after
+  checking that its code is compatible with the current database schema and
+  data. Deploying an older release does not reverse database migrations.
 - **Admin SSH**: set `ADMIN_SSH_PUBLIC_KEY` and `ADMIN_SSH_CIDRS`, then apply.
   Alternatively, use the OCI Console's serial console without opening port 22.
 - **Logs**: on the host, run `docker logs <container>`, or use

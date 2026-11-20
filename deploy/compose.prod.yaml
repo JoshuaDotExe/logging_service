@@ -4,7 +4,7 @@
 #   docker compose -f compose.yaml -f deploy/compose.prod.yaml ...
 #
 # Required variables (written to /opt/logging-service/.env by the deploy workflow):
-#   IMAGE_REGISTRY, IMAGE_TAG, DEPLOY_ROOT, POSTGRES_DATA_DIR
+#   IMAGE_REGISTRY, IMAGE_TAG, RELEASE_VERSION, RELEASE_COMMIT, DEPLOY_ROOT, POSTGRES_DATA_DIR
 
 x-app: &app
   restart: unless-stopped
