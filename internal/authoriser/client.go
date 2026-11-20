@@ -92,10 +92,10 @@ func (c *Client) VerifyAPIKey(ctx context.Context, apiKey string) (APIKey, error
 func (c *Client) Authorize(ctx context.Context, apiKey string, scope Scope) (Authorization, error) {
 	key, err := c.VerifyAPIKey(ctx, apiKey)
 	if errors.Is(err, ErrInvalidAPIKey) {
-		return Authorization{}, nil
+		return Authorization{Authorized: false, AccountID: ""}, ErrInvalidAPIKey
 	}
 	if err != nil {
-		return Authorization{}, err
+		return Authorization{Authorized: false, AccountID: ""}, fmt.Errorf("%w: %w", ErrAuthorizationUnavailable, err)
 	}
 	return Authorization{
 		Authorized: scope == ScopeNone || slices.Contains(key.Scopes, string(scope)),

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"logging-service/internal/authoriser"
@@ -20,7 +21,18 @@ func (h *Handlers) requireAuthorization(scope authoriser.Scope) gin.HandlerFunc 
 			scope,
 		)
 		if err != nil {
-			h.logger.Error("authorisation check failed", "error", err)
+			// Distinguish between invalid API key (401) and service unavailability (503)
+			if errors.Is(err, authoriser.ErrInvalidAPIKey) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
+				return
+			}
+			if errors.Is(err, authoriser.ErrAuthorizationUnavailable) {
+				h.logger.Error("authorisation service unavailable", "error", err)
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "authorization unavailable"})
+				return
+			}
+			// Unknown error, treat as service unavailable
+			h.logger.Error("authorisation check failed with unknown error", "error", err)
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "authorization unavailable"})
 			return
 		}

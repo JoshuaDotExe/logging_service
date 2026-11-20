@@ -8,7 +8,10 @@ import (
 	"fmt"
 )
 
-var ErrInvalidAPIKey = errors.New("invalid API key")
+var (
+	ErrInvalidAPIKey           = errors.New("invalid API key")
+	ErrAuthorizationUnavailable = errors.New("authorization service unavailable")
+)
 
 type Scope string
 
