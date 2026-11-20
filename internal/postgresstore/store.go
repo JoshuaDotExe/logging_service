@@ -293,12 +293,12 @@ func (s *Store) GetAccountDetails(ctx context.Context, username string) (*accoun
 	return &details, nil
 }
 
-func (s *Store) DeleteAccount(ctx context.Context, username string) error {
+func (s *Store) DeleteAccount(ctx context.Context, id uuid.UUID) error {
 	result, err := s.client.Exec(
 		ctx,
 		`DELETE FROM accounts
-		 WHERE username = $1`,
-		username,
+		 WHERE id = $1`,
+		id,
 	)
 	if err != nil {
 		return fmt.Errorf("delete account: %w", err)
@@ -309,13 +309,13 @@ func (s *Store) DeleteAccount(ctx context.Context, username string) error {
 	return nil
 }
 
-func (s *Store) SoftDeleteAccount(ctx context.Context, username string) error {
+func (s *Store) SoftDeleteAccount(ctx context.Context, id uuid.UUID) error {
 	result, err := s.client.Exec(
 		ctx,
 		`UPDATE accounts
 		 SET deleted_at = NOW()
-		 WHERE username = $1`,
-		username,
+		 WHERE id = $1`,
+		id,
 	)
 	if err != nil {
 		return fmt.Errorf("soft delete account: %w", err)

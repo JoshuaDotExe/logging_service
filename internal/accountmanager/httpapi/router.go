@@ -25,14 +25,7 @@ func NewRouter(service *accountmanager.Service, login *accountmanager.LoginServi
 		}
 		c.JSON(200, details)
 	})
-	r.DELETE("/account", auth, func(c *gin.Context) {
-		if err := store.SoftDeleteAccountByID(c.Request.Context(), tokenhandler.CurrentAccount(c).ID); err != nil {
-			logger.Error("delete own account", "error", err)
-			c.JSON(500, gin.H{"error": "account deletion failed"})
-			return
-		}
-		c.Status(204)
-	})
+	r.DELETE("/account", auth, handler.DeleteAccount)
 
 	return r
 }
