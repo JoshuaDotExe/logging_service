@@ -8,6 +8,7 @@ import (
 	"logging-service/internal/accountmanager"
 	"logging-service/internal/authoriser"
 	"logging-service/internal/logservice"
+	"logging-service/internal/tokenhandler"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -322,6 +323,45 @@ func (s *Store) SoftDeleteAccount(ctx context.Context, id uuid.UUID) error {
 	}
 	if result.RowsAffected() == 0 {
 		return fmt.Errorf("soft delete account: %w", pgx.ErrNoRows)
+	}
+	return nil
+}
+
+func (s *Store) SoftDeleteAccountByID(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.client.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin account deletion: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	result, err := tx.Exec(ctx, `
+        UPDATE accounts
+        SET deleted_at = now(),
+            updated_at = now()
+        WHERE id = $1
+          AND deleted_at IS NULL
+    `, id)
+	if err != nil {
+		return fmt.Errorf("soft delete account: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return tokenhandler.ErrAccountIneligible
+	}
+
+	_, err = tx.Exec(ctx, `
+        UPDATE api_keys
+        SET soft_deleted = true,
+            deactivated_at = COALESCE(deactivated_at, now()),
+            deactivated_by = $2
+        WHERE account_id = $1
+          AND soft_deleted = false
+    `, id.String(), id.String())
+	if err != nil {
+		return fmt.Errorf("soft delete account API keys: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit account deletion: %w", err)
 	}
 	return nil
 }

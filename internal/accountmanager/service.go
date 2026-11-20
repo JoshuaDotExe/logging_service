@@ -62,6 +62,7 @@ type AccountStore interface {
 	GetAccountDetails(ctx context.Context, username string) (*AccountDetails, error)
 	DeleteAccount(ctx context.Context, id uuid.UUID) error
 	SoftDeleteAccount(ctx context.Context, id uuid.UUID) error
+	SoftDeleteAccountByID(ctx context.Context, id uuid.UUID) error
 }
 
 type Service struct {
@@ -99,7 +100,7 @@ func (s *Service) DeleteAccount(id uuid.UUID) error {
 	if id == uuid.Nil {
 		return fmt.Errorf("invalid account ID")
 	}
-	return s.handler.SoftDeleteAccount(context.Background(), id)
+	return s.handler.SoftDeleteAccountByID(context.Background(), id)
 }
 
 func (s *Service) GetAccountDetails(username string) (*AccountDetails, error) {
